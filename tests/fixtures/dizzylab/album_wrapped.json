@@ -1,0 +1,23 @@
+{
+  "code": 0,
+  "msg": "success",
+  "data": {
+    "id": "1234",
+    "title": "Scarlet Nocturne",
+    "circle": {"id": 88, "name": "幻想交響録"},
+    "artists": [{"id": 1, "name": "Alice"}, "Bob"],
+    "release_date": "2026-10-25",
+    "cover": "/upload/cover/1234.jpg",
+    "catalog": "DZ-0012",
+    "price": 45,
+    "tags": "同人音乐,东方",
+    "genres": ["Electronic", "Symphonic"],
+    "description": "<p>东方同人专辑<br>全3曲收录</p>",
+    "url": "https://www.dizzylab.net/d/1234/",
+    "tracks": [
+      {"title": "Overture", "duration": "3:45", "artists": ["Alice"]},
+      {"name": "Scarlet Nocturne", "duration": 252},
+      {"name": "Moonlit Waltz", "duration": "4:12", "disc": 1, "index": 3}
+    ]
+  }
+}
