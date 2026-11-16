@@ -1,0 +1,99 @@
+{
+  "date": "2009-09-21",
+  "platform": "",
+  "images": {
+    "small": "https://lain.bgm.tv/r/200/pic/cover/l/3d/8d/11770_Dt90M.jpg",
+    "grid": "https://lain.bgm.tv/r/100/pic/cover/l/3d/8d/11770_Dt90M.jpg",
+    "large": "https://lain.bgm.tv/pic/cover/l/3d/8d/11770_Dt90M.jpg",
+    "medium": "https://lain.bgm.tv/r/800/pic/cover/l/3d/8d/11770_Dt90M.jpg",
+    "common": "https://lain.bgm.tv/r/400/pic/cover/l/3d/8d/11770_Dt90M.jpg"
+  },
+  "summary": "01.ナイトオブナイツ[フラワリングナイト] \r\n02.Thank You 感謝!(Live ver.)[神々が恋した幻想郷] \r\n03.U.N.オーエンは彼女なのか?-最終鬼畜妹フランドール・S[U.N.オーエンは彼女なのか?] \r\n04.シアワセうさぎ(再)[シンデレラケージ・お宇佐さまの素い幡] \r\n05.ケロdestiny[ネイティブフェイス] \r\n06.Help me ERINNNNNN!![竹取飛翔] \r\n07.チルノのパーフェクトさんすう教室[おてんば恋娘]",
+  "name": "東方projectアレンジのあれんじ",
+  "name_cn": "",
+  "tags": [
+    {
+      "name": "東方",
+      "count": 6,
+      "total_count": 13302
+    },
+    {
+      "name": "まらしぃ",
+      "count": 5,
+      "total_count": 86
+    },
+    {
+      "name": "触手猴",
+      "count": 2,
+      "total_count": 64
+    },
+    {
+      "name": "同人",
+      "count": 1,
+      "total_count": 6827
+    }
+  ],
+  "infobox": [
+    {
+      "key": "版本特性",
+      "value": "同人音楽作品"
+    },
+    {
+      "key": "艺术家",
+      "value": "まらしぃ"
+    },
+    {
+      "key": "发售日期",
+      "value": "2009-09-21"
+    },
+    {
+      "key": "展会",
+      "value": "東方奏麗祭"
+    },
+    {
+      "key": "价格",
+      "value": "1,000円"
+    },
+    {
+      "key": "播放时长",
+      "value": "27:27"
+    },
+    {
+      "key": "碟片数量",
+      "value": "1"
+    }
+  ],
+  "rating": {
+    "rank": 0,
+    "total": 13,
+    "count": {
+      "1": 0,
+      "2": 0,
+      "3": 0,
+      "4": 1,
+      "5": 0,
+      "6": 2,
+      "7": 2,
+      "8": 4,
+      "9": 3,
+      "10": 1
+    },
+    "score": 7.6
+  },
+  "total_episodes": 7,
+  "collection": {
+    "on_hold": 0,
+    "dropped": 0,
+    "wish": 2,
+    "collect": 16,
+    "doing": 0
+  },
+  "id": 11770,
+  "eps": 0,
+  "meta_tags": [],
+  "volumes": 0,
+  "series": false,
+  "locked": false,
+  "nsfw": false,
+  "type": 3
+}
