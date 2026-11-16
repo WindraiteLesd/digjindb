@@ -1,0 +1,19 @@
+# DDDB 公开站点配置样例
+# 复制为 config/config.toml 后修改（config.toml 不进版本库）
+
+[public]
+# 会话库路径；留空 = 只放内存（重启掉线）
+sessions_db = "data/sessions.sqlite3"
+
+# 站点对外地址（写进 robots.txt / sitemap.xml）
+base_url = "https://www.digjindb.top"
+
+# 部署在反向代理后面（信任 X-Forwarded-For）
+behind_proxy = true
+
+# 限速开关与配额
+rate_limit_enabled = true
+rate_limit_rate = 30
+rate_limit_burst = 60
+rate_limit_heavy_burst = 10
+rate_limit_write_burst = 5
