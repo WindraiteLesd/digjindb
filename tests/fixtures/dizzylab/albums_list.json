@@ -1,0 +1,12 @@
+{
+  "code": 0,
+  "msg": "success",
+  "data": {
+    "page": 1,
+    "total": 2,
+    "list": [
+      {"id": "201", "title": "Album A", "circle_name": "Circle A", "cover": "/upload/cover/201.jpg"},
+      {"id": "202", "title": "Album B", "circle_name": "Circle B", "cover": "/upload/cover/202.jpg"}
+    ]
+  }
+}
