@@ -71,15 +71,6 @@ class NotAuthenticated(DnhError):
     """需要登录态但未登录 / 登录已过期."""
 
 
-class NeteaseApiError(DnhError):
-    """网易云接口返回业务错误码."""
-
-    def __init__(self, message: str, *, code: int | None = None, payload: Any = None) -> None:
-        super().__init__(message)
-        self.code = code
-        self.payload = payload
-
-
 class ProxyError(DnhError):
     """代理不可用."""
 
