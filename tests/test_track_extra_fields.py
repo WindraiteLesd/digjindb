@@ -14,7 +14,7 @@ class TestTrackExtraFieldsModel(unittest.TestCase):
     """Track 模型支持 subtitle/title_zh/lang/genre."""
 
     def test_fields_exist(self) -> None:
-        from dnh.models import Track
+        from dddb.models import Track
 
         track = Track(title="曲", subtitle="副", title_zh="译",
                       lang="日语", genre="Trance")
@@ -24,7 +24,7 @@ class TestTrackExtraFieldsModel(unittest.TestCase):
         self.assertEqual(track.genre, "Trance")
 
     def test_defaults_empty(self) -> None:
-        from dnh.models import Track
+        from dddb.models import Track
 
         track = Track(title="曲")
         self.assertEqual(track.subtitle, "")
@@ -33,7 +33,7 @@ class TestTrackExtraFieldsModel(unittest.TestCase):
         self.assertEqual(track.genre, "")
 
     def test_to_dict(self) -> None:
-        from dnh.models import Track
+        from dddb.models import Track
 
         data = Track(title="曲", lang="英语").to_dict()
         self.assertEqual(data["lang"], "英语")
@@ -41,7 +41,7 @@ class TestTrackExtraFieldsModel(unittest.TestCase):
             self.assertIn(key, data)
 
     def test_from_dict(self) -> None:
-        from dnh.models import Track
+        from dddb.models import Track
 
         track = Track.from_dict({
             "title": "曲", "subtitle": "副", "title_zh": "译",
@@ -53,7 +53,7 @@ class TestTrackExtraFieldsModel(unittest.TestCase):
         self.assertEqual(track.genre, "Rock")
 
     def test_stripped(self) -> None:
-        from dnh.models import Track
+        from dddb.models import Track
 
         track = Track(title="曲", lang="  日语  ")
         self.assertEqual(track.lang, "日语")
@@ -63,7 +63,7 @@ class TestTrackExtraFieldsParse(unittest.TestCase):
     """表单解析支持补充字段."""
 
     def test_parse_all(self) -> None:
-        from dnh.public.site import parse_album_form
+        from dddb.public.site import parse_album_form
 
         patch, errors = parse_album_form({
             "title": ["T"], "title_original": ["T"],
@@ -80,7 +80,7 @@ class TestTrackExtraFieldsParse(unittest.TestCase):
         self.assertEqual(track["genre"], "Trance")
 
     def test_parse_empty(self) -> None:
-        from dnh.public.site import parse_album_form
+        from dddb.public.site import parse_album_form
 
         patch, _errors = parse_album_form({
             "title": ["T"], "title_original": ["T"],
@@ -92,7 +92,7 @@ class TestTrackExtraFieldsParse(unittest.TestCase):
 
     def test_multiple_tracks_aligned(self) -> None:
         """多首曲目的补充字段不能错位."""
-        from dnh.public.site import parse_album_form
+        from dddb.public.site import parse_album_form
 
         patch, _ = parse_album_form({
             "title": ["T"], "title_original": ["T"],
@@ -112,9 +112,9 @@ class TestTrackExtraFieldsPersist(unittest.TestCase):
     """补充字段要真的落库并能读回."""
 
     def test_roundtrip(self) -> None:
-        from dnh.config import Config
-        from dnh.db import Store
-        from dnh.models import Album
+        from dddb.config import Config
+        from dddb.db import Store
+        from dddb.models import Album
 
         ctx = temp_dir("trkextra-")
         root = Path(ctx.__enter__())
@@ -146,7 +146,7 @@ class TestTrackExtraFieldsPersist(unittest.TestCase):
 
     def test_edit_values_outputs_extras(self) -> None:
         """编辑页回填时要带出补充字段."""
-        from dnh.public import templates as T
+        from dddb.public import templates as T
 
         values = T.edit_values_from_album({
             "key": "t", "title": "T", "title_original": "T", "urls": {},
@@ -169,7 +169,7 @@ class TestDetailShowsExtras(unittest.TestCase):
     """详情页: 有值才显示, 默认隐藏."""
 
     def _detail(self, tracks):
-        from dnh.public import templates as T
+        from dddb.public import templates as T
 
         ctx = T.SiteContext(csrf_token="t", is_editor=False, lang="zh")
         return T.album_detail_page(ctx, album={
