@@ -1,19 +1,15 @@
-# 运行期数据
+# 运行期产物
 data/
+reports/
+.tmp/
 *.sqlite3
 *.sqlite3-wal
 *.sqlite3-shm
-reports/
-covers/
 
-# 本地配置与密钥
-config/config.toml
-config/config.toml.*
+# 本地配置与密钥(不要提交)
+config/config.toml*
 config/.env
 .env
-*.key
-*.pem
-ssh-key-*
 
 # Python
 __pycache__/
@@ -29,9 +25,25 @@ venv/
 .idea/
 .DS_Store
 Thumbs.db
+
+# SSH 私钥 —— 绝不提交、绝不发布
+*.key
+*.pem
+ssh-key-*
+
+# 发布目标(含主机/私钥路径)
+tools/deploy.toml
+
+# 临时/杂项
+tmpeqqx7ctn/
 *.log
-data/
-*.sqlite3
-*.sqlite3-wal
-*.sqlite3-shm
-__pycache__/
+shots/*.png
+shots/*.json
+
+# 分发产物里的备份数据库(体积大, 且是运行期数据)
+dist/*.sqlite3
+dist/*.sqlite3-*
+
+# 部署/同步脚本内嵌真实主机与私钥路径 —— 不入公开仓库
+tools/sync_cloud.py
+tools/sync_covers.py
