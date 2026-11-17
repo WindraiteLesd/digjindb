@@ -109,5 +109,36 @@ class TestLinksRendered(unittest.TestCase):
                          "三个来源站外链都该显示")
 
 
+class TestLinksCentered(unittest.TestCase):
+    """外链区**居中显示**(按钮行 + 播放器)。"""
+
+    def _css(self) -> str:
+        return (ROOT / "dddb/public/static/public.css").read_text(
+            encoding="utf-8")
+
+    def test_links_row_centered(self) -> None:
+        css = self._css()
+        import re
+        m = re.search(r"\.links \{([^}]*)\}", css)
+        self.assertIsNotNone(m, "找不到 .links")
+        body = m.group(1)
+        self.assertIn("justify-content: center", body,
+                      "外链按钮行要居中")
+
+    def test_embed_player_centered(self) -> None:
+        css = self._css()
+        import re
+        m = re.search(r"\.embed-player \{([^}]*)\}", css)
+        self.assertIsNotNone(m, "找不到 .embed-player")
+        self.assertIn("auto", m.group(1), "播放器要 auto 外边距居中")
+
+    def test_embed_list_centered(self) -> None:
+        css = self._css()
+        import re
+        m = re.search(r"\.embed-list \{([^}]*)\}", css)
+        self.assertIsNotNone(m)
+        self.assertIn("align-items: center", m.group(1))
+
+
 if __name__ == "__main__":
     unittest.main()
