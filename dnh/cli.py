@@ -83,14 +83,14 @@ def _human_size(num: float) -> str:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="dnh",
-        description="同人音乐自动检索 + 网易云匹配 + 标记管理 (doujindigdb)",
+        description="同人音乐自动检索 + 外部匹配 + 标记管理 (doujindigdb)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "示例:\n"
             "  dnh init\n"
             "  dnh doctor\n"
             "  dnh events list --year 2026\n"
-            "  dnh discover --event M3-2026秋 --sources doujinstyle,x,bangumi\n"
+            "  dnh discover --event M3-2026秋 --sources 某站点,x,某站点\n"
             "  dnh run --event M3-2026秋\n"
         ),
     )
@@ -108,7 +108,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_init.add_argument("--force", action="store_true", help="覆盖已存在的配置文件")
 
     # doctor
-    sub.add_parser("doctor", help="环境自检(代理/数据源/网易云连通性)")
+    sub.add_parser("doctor", help="环境自检(代理/数据源/外部音乐库连通性)")
 
     # bilibili: 搜 B 站搬运的试听视频, 给专辑补链接
     p_bili = sub.add_parser("bilibili", help="搜索 B 站搬运的试听视频并补进专辑链接")
@@ -125,7 +125,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_covers.add_argument("--clear", action="store_true",
                           help="清掉这些封面(之后 enrich 会重新找)")
     p_covers.add_argument("--from-netease", action="store_true",
-                          help="给已匹配到网易云但没封面的专辑补封面(用其专辑图)")
+                          help="给已匹配到外部音乐库但没封面的专辑补封面(用其专辑图)")
     p_covers.add_argument("--from-shop", action="store_true",
                           help="从通贩页面(BOOTH/Melonbooks…)取商品图当封面")
     p_covers.add_argument("--suspect", action="store_true",
@@ -135,7 +135,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_covers.add_argument("--budget", type=int, default=80,
                           help="--broken 最多联网检查多少张(默认 80, 避免跑太久)")
     p_covers.add_argument("--cache-remote", action="store_true",
-                          help="把外链封面(如网易云 p*.music.126.net)下载缓存到 data/covers/")
+                          help="把外链封面(如外部音乐库 p*.music.126.net)下载缓存到 data/covers/")
     p_covers.add_argument("--limit", type=int, default=0,
                           help="--cache-remote 本次最多下载几张(默认 0 = 不限)")
     p_covers.add_argument("--dry-run", action="store_true",
@@ -175,7 +175,7 @@ def build_parser() -> argparse.ArgumentParser:
                           help="顺带搜 B 站搬运的试听视频(有风控, 默认关)")
 
     # match
-    p_match = sub.add_parser("match", help="在网易云检索并打分")
+    p_match = sub.add_parser("match", help="在外部音乐库检索并打分")
     p_match.add_argument("--event", default="")
     p_match.add_argument("--tag", default="")
     p_match.add_argument("--limit", type=int, default=300)
@@ -194,11 +194,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_run.add_argument("--no-covers", action="store_true")
 
     # playlist
-    p_pl = sub.add_parser("playlist", help="用网易云歌单链接反查本地库(只读)")
+    p_pl = sub.add_parser("playlist", help="用外部音乐库歌单链接反查本地库(只读)")
     pl_sub = p_pl.add_subparsers(dest="playlist_command", metavar="<子命令>")
     p_pl_cmp = pl_sub.add_parser("compare", help="把歌单曲目和本地数据库对照")
     p_pl_cmp.add_argument("--url", required=True,
-                          help="网易云歌单链接或歌单 id, 例如 https://music.163.com/#/playlist?id=123456")
+                          help="外部音乐库歌单链接或歌单 id, 例如 https://music.163.com/#/playlist?id=123456")
     p_pl_cmp.add_argument("--event", default="", help="只对照该展会下的本地专辑")
     p_pl_cmp.add_argument("--tag", default="")
     p_pl_cmp.add_argument("--limit", type=int, default=None, help="本地专辑取样上限")
@@ -206,7 +206,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_pl_cmp.add_argument("--mark", default="", help="把命中的本地专辑打上该标记(如「已加入歌单」)")
     p_pl_cmp.add_argument("--match-filter", default="matched",
                         choices=["matched", "unmatched", "all"],
-                        help="参与对照的专辑范围(默认只对照已匹配网易云的)")
+                        help="参与对照的专辑范围(默认只对照已匹配外部音乐库的)")
     p_pl_cmp.add_argument("--no-terminal", action="store_true")
 
     # report
@@ -222,7 +222,7 @@ def build_parser() -> argparse.ArgumentParser:
     # robots: 抓取合规检查(只读, 不发实际采集请求)
     p_robots = sub.add_parser(
         "robots", help="查看某个 URL / 各数据源的 robots.txt 判定(只读检查)")
-    p_robots.add_argument("url", nargs="?", default="", help="要检查的 URL, 如 https://bgm.tv/subject/1")
+    p_robots.add_argument("url", nargs="?", default="", help="要检查的 URL, 如 https://某站点/subject/1")
     p_robots.add_argument("--audit", action="store_true",
                           help="汇总各数据源的 host + 最小请求间隔 + robots 状态")
     p_robots.add_argument("--refresh", action="store_true", help="忽略缓存重新取 robots.txt")
@@ -244,10 +244,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_db_albums.add_argument("--query", default="")
     p_db_albums.add_argument("--limit", type=int, default=50)
 
-    p_netease = sub.add_parser("netease", help="网易云检索(只读, 帮手动匹配找 id)")
+    p_netease = sub.add_parser("netease", help="外部音乐库检索(只读, 帮手动匹配找 id)")
     netease_sub = p_netease.add_subparsers(dest="netease_command", metavar="<子命令>")
     p_netease_search = netease_sub.add_parser(
-        "search", help="按关键词搜网易云专辑, 打印 id 供 dnh db match --netease 使用")
+        "search", help="按关键词搜外部音乐库专辑, 打印 id 供 dnh db match --netease 使用")
     p_netease_search.add_argument("keywords", nargs="+", help="关键词(标题/社团)")
     p_netease_search.add_argument("--limit", type=int, default=10, help="最多几条(默认 10)")
 
@@ -257,7 +257,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_db_desc = db_sub.add_parser(
         "desc", help="给简介为空的专辑补简介(**只取条目简介, 不取收藏短评**)")
-    p_db_desc.add_argument("--source", default="bangumi", help="目前支持 bangumi")
+    p_db_desc.add_argument("--source", default="某站点", help="目前支持 某站点")
     p_db_desc.add_argument("--event", default="")
     p_db_desc.add_argument("--limit", type=int, default=0)
     p_db_desc.add_argument("--dry-run", action="store_true")
@@ -265,7 +265,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_db_reparse = db_sub.add_parser(
         "reparse", help="用已存的源 ID 重新抓页面并**覆盖**元数据(清洗解析 bug 造成的脏数据)")
-    p_db_reparse.add_argument("--source", default="vgmdb", help="目前支持 vgmdb")
+    p_db_reparse.add_argument("--source", default="某站点", help="目前支持 某站点")
     p_db_reparse.add_argument("--event", default="", help="只处理该展会")
     p_db_reparse.add_argument("--limit", type=int, default=0, help="最多处理多少张(0=全部)")
     p_db_reparse.add_argument("--dry-run", action="store_true", help="只列出要处理的专辑")
@@ -284,13 +284,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_db_delete.add_argument("--query", default="")
     p_db_delete.add_argument("--mark", default="")
     p_db_delete.add_argument("--unmarked", action="store_true", help="只删没有任何标记的")
-    p_db_delete.add_argument("--unmatched", action="store_true", help="只删没有网易云匹配的")
+    p_db_delete.add_argument("--unmatched", action="store_true", help="只删没有外部匹配的")
     p_db_delete.add_argument("--dry-run", action="store_true")
     p_db_delete.add_argument("--yes", action="store_true")
 
     p_db_unmatch = db_sub.add_parser(
         "unmatch",
-        help="取消网易云匹配并**记住不再自动匹配**(删匹配记录 + 写人工拒绝, 不动专辑)")
+        help="取消外部匹配并**记住不再自动匹配**(删匹配记录 + 写人工拒绝, 不动专辑)")
     p_db_unmatch.add_argument("keys", nargs="+", help="专辑 key(可多个)")
     p_db_unmatch.add_argument("--reason", default="cli", help="记录一下拒绝原因(便于事后核对)")
     p_db_rematch = db_sub.add_parser(
@@ -299,10 +299,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_db_rematch.add_argument("--list", action="store_true",
                               help="只列出当前所有被人工取消的专辑")
     p_db_match = db_sub.add_parser(
-        "match", help="手动把专辑挂到指定网易云条目(权威, 自动匹配之后不会覆盖)")
+        "match", help="手动把专辑挂到指定外部音乐库条目(权威, 自动匹配之后不会覆盖)")
     p_db_match.add_argument("key", nargs="*", help="专辑 key; 配合 --list-manual 时可省略")
     p_db_match.add_argument("--netease", "-n", default="",
-                            help="网易云专辑 id 或链接(直接粘贴浏览器地址即可)")
+                            help="外部音乐库专辑 id 或链接(直接粘贴浏览器地址即可)")
     p_db_match.add_argument("--clear-manual", "--auto", dest="clear_manual",
                             action="store_true",
                             help="撤销手动标记, 改回由算法决定(只删 manual 那条, 不写拒绝)")
@@ -394,7 +394,7 @@ def _load_config(args: argparse.Namespace) -> Config:
 
 
 def _netease_status(client) -> dict:
-    """只读地看一眼网易云接口能不能用(不再有登录/收藏功能)."""
+    """只读地看一眼外部音乐库接口能不能用(不再有登录/收藏功能)."""
     try:
         payload = client.login_status()
     except Exception as exc:
@@ -433,7 +433,7 @@ def cmd_init(cfg: Config, args: argparse.Namespace) -> int:
         out(f"目录: {d}")
     out("")
     out("下一步:")
-    out("  1) dnh doctor               # 检查代理 / 数据源 / 网易云连通性")
+    out("  1) dnh doctor               # 检查代理 / 数据源 / 外部音乐库连通性")
     out("  2) dnh events list          # 看看最近有哪些展会")
     out("  3) dnh discover --event M3-2026秋")
     return 0
@@ -488,17 +488,17 @@ def cmd_doctor(cfg: Config, args: argparse.Namespace) -> int:
             )
         report["sources"] = src_rows
 
-        # 网易云(只读: 这里只探测接口能不能连通 / 有没有登录态)
+        # 外部音乐库(只读: 这里只探测接口能不能连通 / 有没有登录态)
         client = pipe.netease
         info = _netease_status(client)
         checks.append(
             (
-                "网易云登录",
+                "外部音乐库登录",
                 info["ok"],
                 f"uid={info['uid']} {info.get('nickname','')}".strip() if info["ok"] else info["reason"],
             )
         )
-        checks.append(("网易云传输", True, client.mode))
+        checks.append(("外部音乐库传输", True, client.mode))
         report["netease"] = {"mode": client.mode, **info}
 
         # X 后端已移除
@@ -522,7 +522,7 @@ def cmd_doctor(cfg: Config, args: argparse.Namespace) -> int:
     counts = report["db"]
     out(
         f"数据库: 专辑 {counts['albums']} / 来源映射 {counts['album_sources']} / "
-        f"标记 {counts.get('album_marks', 0)} / 网易云匹配 {counts['netease_matches']}"
+        f"标记 {counts.get('album_marks', 0)} / 外部匹配 {counts['netease_matches']}"
     )
     if counts.get("events"):
         out("已入库展会: " + ", ".join(f"{name}({n})" for name, _kind, n in counts["events"]))
@@ -667,11 +667,11 @@ def cmd_run(cfg: Config, args: argparse.Namespace) -> int:
 
 
 def cmd_playlist(cfg: Config, args: argparse.Namespace) -> int:
-    """网易云歌单 ↔ 本地库 对照(只读; 可选把命中项打标记)."""
+    """外部音乐库歌单 ↔ 本地库 对照(只读; 可选把命中项打标记)."""
     from .playlist import compare_playlist, parse_playlist_ref
 
     if getattr(args, "playlist_command", None) != "compare":
-        print("用法: dnh playlist compare --url <网易云歌单链接>", file=sys.stderr)
+        print("用法: dnh playlist compare --url <外部音乐库歌单链接>", file=sys.stderr)
         return 2
 
     playlist_id = parse_playlist_ref(args.url)
@@ -696,7 +696,7 @@ def cmd_playlist(cfg: Config, args: argparse.Namespace) -> int:
             limit=args.limit or 5000,
             order="circle",
         )
-        # 默认只对照**已匹配网易云**的专辑: 没上线的碟加不进歌单, 列出来只是噪音
+        # 默认只对照**已匹配外部音乐库**的专辑: 没上线的碟加不进歌单, 列出来只是噪音
         from .playlist import filter_by_match, normalize_match_filter
 
         match_filter = normalize_match_filter(getattr(args, "match_filter", ""))
@@ -907,7 +907,7 @@ def _covers_broken(cfg: Config, args: argparse.Namespace) -> int:
 def _covers_cache_remote(cfg: Config, args: argparse.Namespace) -> int:
     """``dnh covers --cache-remote``: 把**外链封面**下载缓存到本地.
 
-    现状是网易云匹配后 ``cover_url`` 指向 ``p1.music.126.net`` 这种外链, 图不落盘 ——
+    现状是外部匹配后 ``cover_url`` 指向 ``p1.music.126.net`` 这种外链, 图不落盘 ——
     对方图床一失效/防盗链, 界面就没图了。这里用 HttpClient(超时/节流/robots 都在)
     逐个下载, 校验确实是图片后写到 ``data/covers/<key>.img`` 并补 ``cover_local``,
     **保留 ``cover_url``**。
@@ -989,7 +989,7 @@ def cmd_covers(cfg: Config, args: argparse.Namespace) -> int:
 
         with Pipeline(cfg, None) as pipe:
             filled, _ = pipe.fill_covers_from_netease(event=args.event)
-        print(f"从网易云补到 {len(filled)} 张封面。")
+        print(f"从外部音乐库补到 {len(filled)} 张封面。")
         for album in filled[:20]:
             print(f"   {album.display_title[:40]:<42} {(album.cover_url or '')[:50]}")
         return 0
@@ -1048,13 +1048,13 @@ def cmd_covers(cfg: Config, args: argparse.Namespace) -> int:
 def _cmd_db_desc(cfg: Config, args: argparse.Namespace, store) -> int:
     """补简介.
 
-    **只认条目的 summary**: bgm.tv 的 ``row["comment"]`` 是收藏者短评(吐槽),
+    **只认条目的 summary**: 某站点 的 ``row["comment"]`` 是收藏者短评(吐槽),
     曾经被当成简介抓进来过(实测全库清了 25 条, 包括 InPhant 那种)。
     所以这里走 ``fetch_album`` 拿到的 ``description``, 它来自 API 的 summary 字段。
     """
     from .pipeline import Pipeline
 
-    source = str(getattr(args, "source", "bangumi") or "bangumi")
+    source = str(getattr(args, "source", "某站点") or "某站点")
     event = str(getattr(args, "event", "") or "")
     limit = int(getattr(args, "limit", 0) or 0)
     overwrite = bool(getattr(args, "overwrite", False))
@@ -1106,7 +1106,7 @@ def _cmd_db_reparse(cfg: Config, args: argparse.Namespace, store) -> int:
     """
     from .pipeline import Pipeline
 
-    source = str(getattr(args, "source", "vgmdb") or "vgmdb")
+    source = str(getattr(args, "source", "某站点") or "某站点")
     event = str(getattr(args, "event", "") or "")
     limit = int(getattr(args, "limit", 0) or 0)
     dry_run = bool(getattr(args, "dry_run", False))
@@ -1207,7 +1207,7 @@ def _db_match_manual(cfg: Config, args: argparse.Namespace, store) -> int:
         return 2
     album_id = parse_album_ref(ref)
     if not album_id:
-        out(f"解析不了网易云专辑 id: {describe_ref_problem(ref)}")
+        out(f"解析不了外部音乐库专辑 id: {describe_ref_problem(ref)}")
         return 2
 
     results = []
@@ -1220,10 +1220,10 @@ def _db_match_manual(cfg: Config, args: argparse.Namespace, store) -> int:
             try:
                 view = pipe.netease.album_detail_view(album_id)
             except Exception as exc:
-                out(f"  {key}: 网易云取不到专辑 {album_id}: {exc}")
+                out(f"  {key}: 外部音乐库取不到专辑 {album_id}: {exc}")
                 continue
             if not view:
-                out(f"  {key}: 网易云上没有这个专辑(id={album_id}) —— 确认链接/ id 有没有错")
+                out(f"  {key}: 外部音乐库上没有这个专辑(id={album_id}) —— 确认链接/ id 有没有错")
                 continue
             was_blocked = bool(pipe.store.is_blocked(key, int(view.get("album_id") or album_id)))
             result = pipe.matcher.manual_match(
@@ -1271,7 +1271,7 @@ def cmd_netease(cfg: Config, args: argparse.Namespace) -> int:
     if not items:
         out("没有搜到专辑 —— 换个关键词试试(去掉社团名, 或改用罗马字/原名)")
         return 0
-    out(f"网易云专辑候选({len(items)} 条):")
+    out(f"外部音乐库专辑候选({len(items)} 条):")
     for item in items:
         out(f"  {item['album_id']:>12}  {item['name'][:46]}")
         out(f"               艺人={', '.join(item['artists'])[:44]}  "
@@ -1401,7 +1401,7 @@ def cmd_db(cfg: Config, args: argparse.Namespace) -> int:
                 elif not rows and not leftovers:
                     out("没有被拉黑的候选 ✓")
                 else:
-                    out(f"被拉黑的候选: {len(rows)} 条(粒度 = 本地专辑 × 网易云 album_id)")
+                    out(f"被拉黑的候选: {len(rows)} 条(粒度 = 本地专辑 × 外部音乐库 album_id)")
                     for row in rows:
                         out(f"  {row['album_key']}\n"
                             f"      拉黑 album_id={int(row['target_album_id'])}"
