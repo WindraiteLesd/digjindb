@@ -5,7 +5,7 @@ from __future__ import annotations
 import unittest
 from pathlib import Path
 
-from dnh.public.timefmt import (
+from dddb.public.timefmt import (
     DEFAULT_OFFSET,
     LANGUAGE_TZ_LABEL,
     LANGUAGE_TZ_OFFSET,
@@ -100,19 +100,19 @@ class TestWiredIntoDataLayer(unittest.TestCase):
     """数据层 / 用户层 / 站点层都走新的格式化."""
 
     def test_human_time_accepts_lang(self) -> None:
-        from dnh.public.data import human_time
+        from dddb.public.data import human_time
 
         self.assertEqual(human_time(STAMP, "zh"), "2026-11-13 23:25")
         self.assertEqual(human_time(STAMP, "en"), "2026-11-13 15:25")
 
     def test_time_text_accepts_lang(self) -> None:
-        from dnh.public.users import _time_text
+        from dddb.public.users import _time_text
 
         self.assertEqual(_time_text(STAMP, "zh"), "2026-11-13 23:25")
         self.assertEqual(_time_text(0, "zh"), "—")
 
     def test_stamp_text_accepts_lang(self) -> None:
-        from dnh.public.site import _stamp_text
+        from dddb.public.site import _stamp_text
 
         self.assertEqual(_stamp_text(STAMP, "zh"), "2026-11-13 23:25")
         self.assertEqual(_stamp_text(STAMP, "ja"), "2026-11-14 00:25")
@@ -120,7 +120,7 @@ class TestWiredIntoDataLayer(unittest.TestCase):
     def test_no_localtime_left(self) -> None:
         """时间格式化不能再依赖服务器本地时区。"""
         # 检查真实的格式化调用(不是注释/docstring 里的说明文字)
-        for rel in ("dnh/public/data.py", "dnh/public/users.py"):
+        for rel in ("dddb/public/data.py", "dddb/public/users.py"):
             text = (ROOT / rel).read_text(encoding="utf-8")
             for line in text.splitlines():
                 stripped = line.strip()
@@ -136,7 +136,7 @@ class TestAlbumUpdatedText(unittest.TestCase):
     """详情页"最后更新"按页面语言. """
 
     def test_uses_timestamp(self) -> None:
-        from dnh.public import templates as T
+        from dddb.public import templates as T
 
         album = {"updated_at": STAMP, "updated_text": "旧文本"}
         self.assertEqual(T._album_updated_text(album, "zh"),
@@ -145,7 +145,7 @@ class TestAlbumUpdatedText(unittest.TestCase):
                          "2026-11-13 15:25")
 
     def test_falls_back_to_text(self) -> None:
-        from dnh.public import templates as T
+        from dddb.public import templates as T
 
         album = {"updated_text": "只有文本"}
         self.assertEqual(T._album_updated_text(album, "zh"), "只有文本")
@@ -155,7 +155,7 @@ class TestLanguageDetection(unittest.TestCase):
     """语言来自 Cookie / Accept-Language."""
 
     def test_cookie_wins(self) -> None:
-        from dnh.public.site import PublicSite
+        from dddb.public.site import PublicSite
 
         site = object.__new__(PublicSite)
         self.assertEqual(
@@ -163,7 +163,7 @@ class TestLanguageDetection(unittest.TestCase):
             "ja")
 
     def test_accept_language(self) -> None:
-        from dnh.public.site import PublicSite
+        from dddb.public.site import PublicSite
 
         site = object.__new__(PublicSite)
         self.assertEqual(
@@ -171,13 +171,13 @@ class TestLanguageDetection(unittest.TestCase):
             "en")
 
     def test_default_chinese(self) -> None:
-        from dnh.public.site import PublicSite
+        from dddb.public.site import PublicSite
 
         site = object.__new__(PublicSite)
         self.assertEqual(site.lang_from_headers({}), "zh")
 
     def test_unsupported_language_falls_back(self) -> None:
-        from dnh.public.site import PublicSite
+        from dddb.public.site import PublicSite
 
         site = object.__new__(PublicSite)
         self.assertEqual(
