@@ -92,7 +92,7 @@ class TestNoSourceNamesInPublic(unittest.TestCase):
         self.assertEqual(hits, [], f"用户端出现来源名: {hits}")
 
     def test_url_priority_lives_on_admin_side(self) -> None:
-        """顺序表在站长端; 本仓库(线上云端部分)不含站长端, 跳过."""
+        """顺序表挪到站长端后仍可用."""
         try:
             from dnh.webui.linkorder import URL_PRIORITY
         except ImportError:
