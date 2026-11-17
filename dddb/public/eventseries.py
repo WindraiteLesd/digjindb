@@ -73,6 +73,23 @@ def split_resale(event: Any) -> tuple[str, bool]:
     return text, False
 
 
+def vol_from_label(label: Any) -> int:
+    """从会次标签里取**最后一组数字**作为会次号.
+
+    ``"M3-58"`` -> 58 (不是 358), ``"C108"`` -> 108, ``"例大祭21"`` -> 21。
+
+    为什么取最后一组: 系列名本身可能带数字(如 M3), 把全部数字拼起来
+    会得到 358 —— 那是错的。
+    """
+    groups = re.findall(r"(\d+)", str(label or ""))
+    if not groups:
+        return 0
+    try:
+        return int(groups[-1])
+    except ValueError:
+        return 0
+
+
 def parse_event_name(name: Any) -> dict[str, Any]:
     """把展会名拆成 ``{series, abbr, full_name, vol, vol_label}``.
 
