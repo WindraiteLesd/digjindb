@@ -27,7 +27,7 @@ def _album(**overrides):
 
 
 def _render(layout=None, **album_overrides):
-    from dnh.public import templates as T
+    from dddb.public import templates as T
 
     ctx = T.SiteContext(csrf_token="t", is_editor=True, lang="zh",
                         user={"id": 1, "username": "ed", "role": "editor"},
@@ -160,7 +160,7 @@ class TestEventAutoDate(unittest.TestCase):
     """选展会后自动匹配发售日."""
 
     def setUp(self) -> None:
-        self.js = (ROOT / "dnh/public/static/public.js").read_text(
+        self.js = (ROOT / "dddb/public/static/public.js").read_text(
             encoding="utf-8")
 
     def test_js_registered(self) -> None:
@@ -189,7 +189,7 @@ class TestEventAutoDate(unittest.TestCase):
         self.assertIn("lastAuto", block)
 
     def test_backend_endpoint(self) -> None:
-        from dnh.public import site as SITE
+        from dddb.public import site as SITE
 
         self.assertTrue(hasattr(SITE.PublicSite, "event_date_json"))
         data = json.loads(SITE.PublicSite.event_date_json(
@@ -198,7 +198,7 @@ class TestEventAutoDate(unittest.TestCase):
         self.assertEqual(data["date"], "2026-10-25")
 
     def test_unknown_event_returns_not_ok(self) -> None:
-        from dnh.public import site as SITE
+        from dddb.public import site as SITE
 
         data = json.loads(SITE.PublicSite.event_date_json(
             object.__new__(SITE.PublicSite), "name=不存在的展会"))
@@ -215,7 +215,7 @@ class TestLayoutPreferenceStorage(unittest.TestCase):
         ctx = temp_dir("layout-")
         root = Path(ctx.__enter__())
         try:
-            from dnh.public.profile import ProfileStore
+            from dddb.public.profile import ProfileStore
 
             store = ProfileStore(str(root / "p.sqlite3"))
             self.assertIn("user_prefs", store.table_names())
@@ -237,7 +237,7 @@ class TestLayoutPreferenceStorage(unittest.TestCase):
         ctx = temp_dir("layout2-")
         root = Path(ctx.__enter__())
         try:
-            from dnh.public.profile import ProfileStore
+            from dddb.public.profile import ProfileStore
 
             store = ProfileStore(str(root / "p.sqlite3"))
             self.assertFalse(store.set_pref(0, "k", "v"))
@@ -249,7 +249,7 @@ class TestLayoutPreferenceStorage(unittest.TestCase):
 
 class TestJsRegistered(unittest.TestCase):
     def test_all_setup_functions_in_boot(self) -> None:
-        js = (ROOT / "dnh/public/static/public.js").read_text(encoding="utf-8")
+        js = (ROOT / "dddb/public/static/public.js").read_text(encoding="utf-8")
         idx = js.find("function boot(")
         depth = 0
         boot = ""
