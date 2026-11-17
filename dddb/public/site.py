@@ -4488,16 +4488,18 @@ class PublicSite:
     @staticmethod
     @staticmethod
     def _values_from_multipart(headers: Mapping[str, Any] | None,
-                               body: bytes) -> dict[str, list[str]]:
-        """multipart 表单 -> 与 urlencoded 同形的 ``{key: [values]}``.
+                               body: bytes) -> dict[str, Any]:
+        """multipart 表单 -> ``{key: [values]}``, **文件字段另存为 dict**.
 
         **必须保留同名字段的全部值**: 编辑表单里 ``url_key`` / ``url_value`` /
         ``credit_role`` / ``track_title`` 这类字段都会重复出现, 每个表单行一组。
         早先借用 ``parse_multipart()`` 得到 ``dict[str, str]`` —— 同名只留最后一个,
         于是"外链 5 条 -> 保存后 0 条"(用户实测报告的数据丢失)。
 
-        这里按 boundary 逐段解析, 手工累积 list; 文件字段(带 filename)跳过,
-        它们由 ``parse_upload()`` 单独取。
+        文件字段(带 ``filename=``)不要丢: 收成
+        ``{"filename", "content_type", "data"}`` 放进同一个 dict, 否则
+        ``_save_series_image`` / ``_save_album_cover_file`` 读不到上传内容,
+        图片会被静默忽略(页面上就"上传了但没显示")。
         """
         out: dict[str, list[str]] = {}
         raw = body if isinstance(body, bytes) else b""
@@ -4522,14 +4524,34 @@ class PublicSite:
                 head, _, payload = chunk.partition(b"\n\n")
             else:
                 continue
-            if b"filename=" in head:
-                continue                      # 文件字段, 交给 parse_upload
             name_match = re.search(rb'name="([^"]*)"', head)
             if not name_match:
                 continue
             name = name_match.group(1).decode("utf-8", "replace")
-            value = payload.rstrip(b"\r\n-").decode("utf-8", "replace")
-            out.setdefault(name, []).append(value)
+            data = payload.rstrip(b"\r\n-")
+            filename_match = re.search(rb'filename="([^"]*)"', head)
+            if filename_match or b"filename=" in head:
+                filename = (filename_match.group(1).decode("utf-8", "replace")
+                            if filename_match else "")
+                if not filename:
+                    # 空文件框(用户没选文件) -> 忽略, 不要当成"清空"
+                    continue
+                ctype_match = re.search(rb"Content-Type:\s*([^\r\n]+)",
+                                        head, re.I)
+                ctype = (ctype_match.group(1).decode("utf-8", "replace").strip()
+                         if ctype_match else "")
+                out[name] = {
+                    "filename": filename,
+                    "content_type": ctype,
+                    "data": data,
+                }
+                continue
+            value = data.decode("utf-8", "replace")
+            existing = out.get(name)
+            if isinstance(existing, list):
+                existing.append(value)
+            else:
+                out[name] = [value]
         return out
 
 
