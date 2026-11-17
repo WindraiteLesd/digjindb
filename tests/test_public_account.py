@@ -6,8 +6,8 @@ import re
 import unittest
 from pathlib import Path
 
-from dnh.public import site as S
-from dnh.public import templates as T
+from dddb.public import site as S
+from dddb.public import templates as T
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -135,8 +135,8 @@ class TestMemberRoutes(unittest.TestCase):
 
 class TestMemberJsAndCss(unittest.TestCase):
     def setUp(self) -> None:
-        self.js = (ROOT / "dnh" / "public" / "static" / "public.js").read_text(encoding="utf-8")
-        self.css = (ROOT / "dnh" / "public" / "static" / "public.css").read_text(encoding="utf-8")
+        self.js = (ROOT / "dddb" / "public" / "static" / "public.js").read_text(encoding="utf-8")
+        self.css = (ROOT / "dddb" / "public" / "static" / "public.css").read_text(encoding="utf-8")
 
     def test_dialog_js_hooks(self) -> None:
         self.assertIn("setupApplyDialog", self.js)
@@ -362,7 +362,7 @@ class TestNotificationBadgeAndPublicProfile(unittest.TestCase):
         self.assertIn('href="/album/my-album"', html)
 
     def test_notify_hooks_present_in_source(self) -> None:
-        src = (ROOT / "dnh" / "public" / "site.py").read_text(encoding="utf-8")
+        src = (ROOT / "dddb" / "public" / "site.py").read_text(encoding="utf-8")
         self.assertIn('"notify"', src)
         self.assertIn("你的编辑者申请已通过", src)
         self.assertIn("你收到了新的私信" if "你收到了新的私信" in src else "新的私信", src)
