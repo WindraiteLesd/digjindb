@@ -47,6 +47,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 from xml.sax.saxutils import escape as xml_escape
 
+from .eventseries import parse_event_name
 from . import auth
 from . import templates as T
 
@@ -340,6 +341,10 @@ _ROUTE_MAP = {
     "embed": "embed",
     # 展会词条的本地图片
     "event-logo": "event_logo",
+    # 展会**系列**: 详情页与图片
+    "event-series": "event_series_page",
+    "event-series-logo": "event_series_logo",
+    "event-series-poster": "event_series_poster",
     "like": "comment_like",
     "lang": "lang",
     "login": "login",
@@ -370,7 +375,8 @@ _ROUTE_MAP = {
 
 #: 这些路由名必须有第二个路径段, 否则视为 index(或 404)
 _ENTITY_ROUTES = frozenset({"album", "circle", "event", "tag", "cover", "static",
-                              "event-date", "embed", "event_logo"})
+                              "event-date", "embed", "event_logo", "event_series_page",
+                              "event_series_logo", "event_series_poster"})
 
 #: 索引页路由名 -> 实体路由名(``/circle/<x>`` 缺失时退化为 ``/circles``)
 _INDEX_OF = {"album": "albums", "circle": "circles", "event": "events", "tag": "tags"}
@@ -421,6 +427,12 @@ def parse_route(path: str) -> dict[str, str]:
     # 外链嵌入播放器: /embed/<album key>/<序号> -> 302 到平台播放器
     if name == "embed" and len(rest) >= 2:
         return {"name": "embed", "arg": "/".join(rest)}
+    # 展会系列: /event-series/<name>/edit 与 /event-series/new
+    if name == "event-series":
+        if len(rest) == 1 and rest[0].lower() == "new":
+            return {"name": "event_series_edit", "arg": "", "new": True}
+        if len(rest) >= 2 and rest[-1].lower() == "edit":
+            return {"name": "event_series_edit", "arg": "/".join(rest[:-1])}
     if name == "album" and len(rest) >= 2 and rest[-1].lower() == "history":
         return {"name": "album_history", "arg": "/".join(rest[:-1])}
     # 展会名 -> 日期(编辑页"发售日自动匹配"用, 只读)
@@ -1867,6 +1879,15 @@ class PublicSite:
             return self.serve_embed(arg)
         if name == "event_logo":
             return self.serve_event_logo(arg)
+        if name == "event_series_page":
+            return Response.html(self.page_event_series(
+                str(arg or ""), params or {}, state))
+        if name == "event_series_edit":
+            return self.page_event_series_edit(arg, params or {}, state)
+        if name == "event_series_logo":
+            return self.serve_series_image(str(arg or ""), "logo")
+        if name == "event_series_poster":
+            return self.serve_series_image(str(arg or ""), "poster")
         if name == "cover":
             return self.serve_cover(arg)
         if name == "favicon":
@@ -2278,6 +2299,9 @@ class PublicSite:
         if name == "circle_comment":
             return self._do_circle_comment(values, state, cookies)
 
+        if name == "event_series_edit":
+            return self._do_series_save(str(arg or "").strip("/"), values,
+                                        state, cookies, headers, body)
         if name == "new":
             return self._do_new_entity(str(arg or "").strip().strip("/").lower(),
                                        values, state, cookies, headers, body)
@@ -4623,13 +4647,24 @@ class PublicSite:
                     year = int(field("year") or 0)
                 except ValueError:
                     year = 0
-                store.save_event(name, kind=field("kind"), year=year,
-                                 season=field("season"),
-                                 start_date=field("start_date"),
-                                 end_date=field("end_date"),
-                                 tags=self._split_names(field("tags")),
-                                 logo_url=field("logo_url"),
-                                 links=self._parse_urls(field("links")))
+                # 没填会次号就按名字自动解析(与迁移同一套规则)
+                _info = parse_event_name(name)
+                _series = (field("series").strip() or _info["series"])
+                try:
+                    _vol = int(field("vol").strip() or _info["vol"] or 0)
+                except ValueError:
+                    _vol = int(_info["vol"] or 0)
+                store.save_event(
+                    name, kind=field("kind"), year=year,
+                    season=field("season"),
+                    start_date=field("start_date"),
+                    end_date=field("end_date"),
+                    tags=self._split_names(field("tags")),
+                    logo_url=field("logo_url"),
+                    links=self._parse_urls(field("links")),
+                    series=_series, vol=_vol,
+                    vol_label=(field("vol_label").strip()
+                               or _info["vol_label"]))
                 created_name = name
                 target = "/event/" + T.quote_segment(name)
             elif kind == "tag":
@@ -4833,6 +4868,21 @@ class PublicSite:
                               if str(e.get("name")) == name), {}) or {}
                 _has_logo_field = "logo_url" in values
                 _has_links_field = "links" in values
+                # 系列/会次号: 表单没带就保留原值
+                _info = parse_event_name(name)
+                _series = (text_field(values, "series").strip()
+                           if "series" in values
+                           else str(_prev.get("series") or _info["series"]))
+                try:
+                    _vol = (int(text_field(values, "vol").strip() or 0)
+                            if "vol" in values
+                            else int(_prev.get("vol") or _info["vol"] or 0))
+                except ValueError:
+                    _vol = int(_prev.get("vol") or _info["vol"] or 0)
+                _vol_label = (text_field(values, "vol_label").strip()
+                              if "vol_label" in values
+                              else str(_prev.get("vol_label")
+                                       or _info["vol_label"]))
                 store.save_event(
                     name, kind=text_field(values, "kind").strip(), year=year,
                     season=text_field(values, "season").strip(),
@@ -4845,7 +4895,8 @@ class PublicSite:
                     logo_local=str(_prev.get("logo_local") or ""),
                     links=(self._parse_urls(text_field(values, "links"))
                            if _has_links_field
-                           else dict(_prev.get("links") or {})))
+                           else dict(_prev.get("links") or {})),
+                    series=_series, vol=_vol, vol_label=_vol_label)
             elif kind == "tag":
                 ok, message = store.save_tag(
                     name, kind=text_field(values, "kind").strip(),
@@ -5033,8 +5084,191 @@ class PublicSite:
 
     def page_events(self, state: auth.AuthState | None = None) -> str:
         return T.events_index_page(
-            self.context(state, active="events"), events=self.data.events(), kinds=self.data.event_kinds()
+            self.context(state, active="events"),
+            events=self.data.events(),
+            kinds=self.data.event_kinds(),
+            series=self.data.event_series(),
         )
+
+    def page_event_series_edit(self, name: str,
+                               params: Mapping[str, Any],
+                               state: auth.AuthState) -> Response:
+        """GET ``/event-series/<name>/edit`` 与 ``/event-series/new``."""
+        if not self.can_edit(state):
+            return self._html(self.forbidden(state, "只有编辑者可以编辑展会系列。"),
+                              status=403)
+        creating = not str(name or "").strip()
+        series: dict[str, Any] = {}
+        if not creating:
+            series = next((x for x in self.data.event_series()
+                           if x["name"] == name), None) or {}
+            if not series:
+                return self._html(
+                    T.error_page(self.context(state, active="events"),
+                                 status=404,
+                                 message=f"没有这个展会系列: {name}"),
+                    status=404)
+        return self._html(T.event_series_edit_page(
+            self.context(state, active="events"), series=series,
+            creating=creating))
+
+    def _do_series_save(self, name: str, values: Mapping[str, Any],
+                        state: auth.AuthState, cookies: list[str],
+                        headers: Mapping[str, Any] | None = None,
+                        body: bytes = b"") -> Response:
+        """POST ``/event-series/<name>/edit`` / ``/new``: 保存系列(含图片上传)."""
+        if not self.can_edit(state):
+            return self._html(self.forbidden(state, "只有编辑者可以保存。"),
+                              status=403, cookies=cookies)
+        if self.db_path is None:
+            return self._html(self.forbidden(state, "本站当前不允许写入。"),
+                              status=503, cookies=cookies)
+        content_type = str((headers or {}).get("content-type") or "")
+        if content_type.startswith("multipart/form-data") and body:
+            values = {**dict(values),
+                      **self._values_from_multipart(headers, body)}
+
+        from dddb.db import Store as _Store
+
+        target_name = (text_field(values, "name").strip()
+                       or str(name or "").strip())
+        if not target_name:
+            return self._html(self.forbidden(state, "系列名不能为空。"),
+                              status=400, cookies=cookies)
+        store = _Store(self.db_path)
+        try:
+            prev = (next((x for x in store.list_series()
+                          if x["name"] == target_name), None) or {})
+            # 图片: 新上传优先, 否则沿用原值
+            logo_local = str(prev.get("logo_local") or "")
+            poster_local = str(prev.get("poster_local") or "")
+            for kind, key in (("logo", "logo_local"), ("poster", "poster_local")):
+                saved = self._save_series_image(target_name, kind, values)
+                if saved:
+                    if key == "logo_local":
+                        logo_local = saved
+                    else:
+                        poster_local = saved
+            store.save_series(
+                target_name,
+                abbr=text_field(values, "abbr").strip(),
+                full_name=text_field(values, "full_name").strip(),
+                logo_url=text_field(values, "logo_url").strip(),
+                logo_local=logo_local,
+                poster_url=text_field(values, "poster_url").strip(),
+                poster_local=poster_local,
+                wiki=raw_field(values, "wiki"),
+                links=self._parse_urls(text_field(values, "links")),
+            )
+        finally:
+            store.close()
+        if hasattr(self.data, "invalidate"):
+            self.data.invalidate()
+        if state.session is not None:
+            state.session.flash = "展会系列已保存"
+        return Response.redirect(
+            "/event-series/" + T.quote_segment(target_name), status=303)
+
+    def _save_series_image(self, name: str, kind: str,
+                           values: Mapping[str, Any]) -> str:
+        """保存系列图片(logo/poster), 返回落盘路径; 没传返回空串."""
+        raw = values.get(kind)
+        if not isinstance(raw, Mapping):
+            return ""
+        blob = raw.get("data") or b""
+        if not blob or len(blob) > 2 * 1024 * 1024:
+            return ""
+        mime = str(raw.get("content_type") or "").split(";")[0].strip().lower()
+        ext = {"image/png": ".png", "image/jpeg": ".jpg",
+               "image/webp": ".webp"}.get(mime)
+        if ext is None:
+            return ""
+        covers = getattr(self.data, "covers_dir", None)
+        base = Path(covers) if covers else Path(self.db_path).parent / "covers"
+        folder = base / "series"
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+            stem = re.sub(r"[^A-Za-z0-9._-]+", "-", name)[:80] or "series"
+            target = folder / "{}-{}{}".format(stem, kind, ext)
+            target.write_bytes(blob)
+            return str(target)
+        except OSError:                      # pragma: no cover
+            return ""
+
+    def page_event_series(self, name: str, params: Mapping[str, Any],
+                          state: auth.AuthState | None = None) -> str:
+        """``/event-series/<name>``: 系列详情(大图 + wiki + 会次网格)."""
+        wanted = str(name or "").strip()
+        if not wanted:
+            return T.error_page(self.context(state, active="events"),
+                                status=404, message="没有指定展会系列。")
+        series = None
+        for item in self.data.event_series():
+            if item["name"] == wanted:
+                series = item
+                break
+        if series is None:
+            return T.error_page(self.context(state, active="events"),
+                                status=404,
+                                message=f"没有这个展会系列: {wanted}")
+        # 会次补齐图片: 会次自己的 logo, 没有就继承系列的
+        editions = []
+        by_name = {e["value"]: e for e in self.data.events()}
+        for ed in series.get("editions") or ():
+            row = dict(ed)
+            live = by_name.get(row["value"]) or {}
+            row["logo"] = str(live.get("logo") or "") or str(series.get("logo") or "")
+            editions.append(row)
+        return T.event_series_page(
+            self.context(state, active="events", search_value=wanted),
+            series=series,
+            editions=editions,
+            can_edit=self.can_edit(state),
+        )
+
+    def serve_series_image(self, name: str, kind: str = "logo") -> Response:
+        """``/event-series-logo/<name>`` / ``-poster``: 系列图片.
+
+        ``kind``: ``logo`` 或 ``poster``。本地有文件就发字节, 否则 302 到远程 URL。
+        """
+        wanted = str(name or "").strip()
+        if not wanted or self.db_path is None:
+            return self._plain_404()
+        local = ""
+        remote = ""
+        try:
+            from dddb.db import Store as _Store
+
+            store = _Store(self.db_path)
+            try:
+                row = store.query_one(
+                    "SELECT * FROM event_series WHERE name = ?", (wanted,))
+            finally:
+                store.close()
+            if row is not None:
+                keys = row.keys()
+                local_key = "{}_local".format(kind)
+                url_key = "{}_url".format(kind)
+                local = str(row[local_key] or "") if local_key in keys else ""
+                remote = str(row[url_key] or "") if url_key in keys else ""
+        except Exception:                    # noqa: BLE001
+            local = remote = ""
+        if local:
+            path = Path(local)
+            if path.is_file():
+                try:
+                    blob = path.read_bytes()
+                except OSError:
+                    blob = b""
+                if blob:
+                    resp = Response.binary(
+                        blob, sniff_image_type(blob) or "image/png", status=200)
+                    resp.headers["Cache-Control"] = "public, max-age=86400"
+                    return resp
+        safe = T.safe_url(remote, allow_relative=False)
+        if safe:
+            return Response.redirect(safe)
+        return self._plain_404()
 
     def page_event(self, name: str, params: Mapping[str, Any], state: auth.AuthState | None = None) -> str:
         group_by = "date" if _first(params, "group") == "date" else "circle"
