@@ -545,11 +545,11 @@ def layout(
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
 <title>{esc(title)} · {esc(ctx.site_name)}</title>
-<link rel="stylesheet" href="/static/public.css?v=55">
+<link rel="stylesheet" href="/static/public.css?v=56">
 <!-- ?v=2: 图标换过, 但静态资源被 CF/浏览器缓存 1 天, 加版本号强制刷新 -->
 <link rel="icon" href="/static/favicon.svg?v=2" type="image/svg+xml">
 <!-- 唯一的脚本: 同源外链, 只做渐进增强(CSP 只给 script-src 'self') -->
-<script src="/static/public.js?v=45" defer></script>
+<script src="/static/public.js?v=46" defer></script>
 </head>
 <body{_bg_attr(ctx)}>
 <a class="skip" href="#content">跳到正文</a>
@@ -2572,18 +2572,18 @@ NEW_ENTITY_SPECS: dict[str, tuple[str, list[tuple[str, str, str, str]]]] = {
         ("avatar", "头像 URL", "text", ""),
         ("links", "相关链接", "textarea", "每行: 标签: URL"),
     ]),
+    # 会次: 字段刻意精简 —— 「类型」= 所属系列(不重复),
+    # 「会次号」从「会次标签」反推(不重复填)
     "event": ("新建会次", [
         ("name", "会次名", "text", "必填, 如 M3-2026秋"),
-        ("series", "所属系列", "text", "系列名, 如 M3 / Comic Market"),
-        ("vol", "会次号", "text", "数字, 如 58 (M3-58)"),
+        ("series", "所属系列", "text", "从已有系列里选"),
         ("vol_label", "会次标签", "text", "如 M3-58 / C108"),
-        ("kind", "类型", "text", "m3 / comiket 等"),
         ("year", "年份", "text", ""),
         ("season", "季节", "text", "春 / 秋"),
-        ("start_date", "开始日期", "text", ""),
-        ("end_date", "结束日期", "text", ""),
+        ("start_date", "开始日期", "date", ""),
+        ("end_date", "结束日期", "date", ""),
         ("tags", "标签", "text", "、分隔"),
-        ("logo_url", "会次图 URL", "text", "留空则沿用系列的图"),
+        ("logo", "会次图", "file", "留空则沿用系列的图"),
         ("links", "相关链接", "textarea", "每行: 标签: URL"),
     ]),
     "tag": ("新建标签", [
@@ -2619,8 +2619,14 @@ def edit_profile_page(
     values: Mapping[str, Any] | None = None,
     notice: str = "",
     back_url: str = "",
+    series_options: Sequence[Mapping[str, Any]] = (),
+    has_logo: bool = False,
 ) -> str:
-    """云端资料录入: 复用 NEW_ENTITY_SPECS 的字段表, 预填当前值."""
+    """云端资料录入: 复用 NEW_ENTITY_SPECS 的字段表, 预填当前值.
+
+    ``file`` 类型渲染成**上传控件**(带已有图预览); ``series`` 渲染成下拉。
+    表单是 ``multipart/form-data`` —— 否则文件不会随 POST 发出。
+    """
     spec_title, fields = NEW_ENTITY_SPECS[kind]
     title = i18n.translate(f"new.{kind}", ctx.lang, default=spec_title)
     values = values or {}
@@ -2629,11 +2635,41 @@ def edit_profile_page(
         value = str(values.get(key) or "")
         hint = f'<span class="field-hint">{esc(help_text)}</span>' if help_text else ""
         locked = " readonly" if key == "name" else ""
-        if field_type == "textarea":
+        if field_type == "file":
+            # 已有图就预览, 让用户知道现在用的是哪张
+            preview = ""
+            if has_logo and kind == "event":
+                preview = ('<img class="series-edit-thumb" '
+                           'src="/event-logo/{}" alt="{}">'
+                           .format(esc(quote_segment(name)), esc(label)))
+            input_html = (
+                '<div class="series-edit-image-row">'
+                '{preview}'
+                '<div class="series-edit-image-form">'
+                '<input type="file" name="{key}"'
+                ' accept="image/png,image/jpeg,image/webp">'
+                '<p class="field-hint">上传后替换当前图；留空则不变</p>'
+                '</div></div>'
+            ).format(preview=preview, key=esc(key))
+        elif key == "series" and series_options:
+            opts = "".join(
+                '<option value="{v}"{sel}>{v}{a}</option>'.format(
+                    v=esc(item.get("name") or ""),
+                    sel=" selected" if value == str(item.get("name") or "")
+                    else "",
+                    a=(" · " + str(item.get("abbr") or ""))
+                    if item.get("abbr") else "")
+                for item in series_options)
+            input_html = (
+                '<select name="{key}">'
+                '<option value="">(按会次名自动识别)</option>{opts}</select>'
+            ).format(key=esc(key), opts=opts)
+        elif field_type == "textarea":
             input_html = f'<textarea name="{esc(key)}" rows="4"{locked}>{esc(value)}</textarea>'
         else:
-            input_html = (f'<input type="text" name="{esc(key)}" value="{esc(value)}"'
-                          f'{locked}>')
+            itype = esc(field_type) if field_type == "date" else "text"
+            input_html = (f'<input type="{itype}" name="{esc(key)}"'
+                          f' value="{esc(value)}"{locked}>')
         rows.append(
             f'<label class="field auth-field"><span>{esc(label)}{hint}</span>'
             f"{input_html}</label>"
@@ -2643,7 +2679,8 @@ def edit_profile_page(
         f"{_notice_html('', notice)}"
         f'<p class="section-note">正在编辑: <a href="{esc(back_url or action[:-5])}">'
         f"{esc(name)}</a></p>"
-        f'<form class="auth-form new-form" method="post" action="{action}">'
+        f'<form class="auth-form new-form" method="post" action="{action}"'
+        ' enctype="multipart/form-data">'
         + _hidden("csrf_token", ctx.csrf_token)
         + "".join(rows)
         + '<div class="field-actions"><button type="submit">保存资料</button>'
@@ -2684,13 +2721,16 @@ def new_entity_page(
 
     # ---- 各实体的"顶部上传区" ----
     upload_html = ""
-    if kind in ("album", "artist", "circle"):
-        label = {"album": "封面", "artist": "头像", "circle": "LOGO"}[kind]
+    if kind in ("album", "artist", "circle", "event"):
+        label = {"album": "封面", "artist": "头像", "circle": "LOGO",
+                 "event": "会次图"}[kind]
+        field_name = "logo" if kind == "event" else "cover"
         upload_html = (
             '<section class="panel"><h2 class="section-title">' + label + "</h2>"
             '<p class="section-note">图片保存在本站云端。</p>'
             '<label class="field"><span>上传' + label + '(PNG/JPEG/WebP, ≤2MB)</span>'
-            '<input type="file" name="cover" accept="image/png,image/jpeg,image/webp">'
+            '<input type="file" name="' + field_name + '"'
+            ' accept="image/png,image/jpeg,image/webp">'
             "</label></section>"
         )
 
@@ -2813,17 +2853,40 @@ def new_entity_page(
             + area("staff", "每行: 角色: 名字") + "</section>"
         )
     elif kind == "event":
+        # 所属系列的候选(下拉), 避免用户手打系列名对不上
+        _series_opts = "".join(
+            '<option value="{v}"{sel}>{v}{a}</option>'.format(
+                v=esc(item.get("name") or ""),
+                sel=" selected" if field("series") == str(item.get("name") or "")
+                else "",
+                a=(" · " + str(item.get("abbr") or ""))
+                if item.get("abbr") else "")
+            for item in bind_options.get("event_series", ())
+        )
+        _series_select = (
+            '<label class="field auth-field"><span>所属系列'
+            '<span class="field-hint">决定名称前缀 [缩写]</span></span>'
+            '<select name="series">'
+            '<option value="">(按会次名自动识别)</option>'
+            '{}</select></label>'.format(_series_opts)
+        )
         body_main = (
-            '<section class="panel"><h2 class="section-title">展会</h2><div class="form-grid">'
-            + text("name", "展会名")
-            + text("kind", "类型", hint="m3 / comiket")
+            '<section class="panel"><h2 class="section-title">会次</h2>'
+            '<div class="form-grid">'
+            + text("name", "会次名", hint="如 M3-2026秋 / C108")
+            + _series_select
+            + text("vol_label", "会次标签", hint="如 M3-58 / C108")
             + text("year", "年份")
-            + text("season", "季节")
+            + text("season", "季节", hint="春 / 秋")
             + text("start_date", "开始日期", input_type="date")
             + text("end_date", "结束日期", input_type="date")
             + "</div></section>"
-            '<section class="panel"><h2 class="section-title">标签</h2>'
-            + area("tags", "标签(回车分隔)") + "</section>"
+            '<section class="panel"><h2 class="section-title">分类</h2>'
+            '<div class="form-grid">'
+            + text("tags", "标签", hint="、分隔")
+            + "</div></section>"
+            f'<section class="panel"><h2 class="section-title">相关链接</h2>'
+            + area("links", "相关链接(每行: 标签: URL)") + "</section>"
         )
     else:  # tag
         body_main = (
