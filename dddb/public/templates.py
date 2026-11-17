@@ -545,11 +545,11 @@ def layout(
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
 <title>{esc(title)} · {esc(ctx.site_name)}</title>
-<link rel="stylesheet" href="/static/public.css?v=54">
+<link rel="stylesheet" href="/static/public.css?v=55">
 <!-- ?v=2: 图标换过, 但静态资源被 CF/浏览器缓存 1 天, 加版本号强制刷新 -->
 <link rel="icon" href="/static/favicon.svg?v=2" type="image/svg+xml">
 <!-- 唯一的脚本: 同源外链, 只做渐进增强(CSP 只给 script-src 'self') -->
-<script src="/static/public.js?v=44" defer></script>
+<script src="/static/public.js?v=45" defer></script>
 </head>
 <body{_bg_attr(ctx)}>
 <a class="skip" href="#content">跳到正文</a>
@@ -1983,6 +1983,18 @@ def event_series_page(
                 ' href="/event-series/{}/edit">编辑系列</a></p>'
                 .format(esc(quote_segment(name)))) if can_edit else ""
 
+    # 相关链接: 之前**完全没渲染** —— 用户填了也看不到。
+    _links = series.get("links") or {}
+    link_html = "".join(
+        '<a class="link-pill" href="{}" data-external="1"'
+        ' rel="nofollow noopener">{}</a>'.format(
+            esc(safe_url(url)), esc(label or url))
+        for label, url in _links.items()
+        if safe_url(url)
+    ) if isinstance(_links, Mapping) else ""
+    links_block = ('<div class="links series-links">{}</div>'.format(link_html)
+                   if link_html else "")
+
     body = (
         '{notice}'
         '<section class="panel series-head">'
@@ -1990,6 +2002,7 @@ def event_series_page(
         '<h2 class="series-title">{title}</h2>'
         '{edit_btn}'
         '<p class="section-note">共 <b>{total}</b> 个会次 · <b>{albums}</b> 张专辑</p>'
+        '{links_block}'
         '</section>'
         '{wiki}'
         '<section class="panel"><h2 class="section-title">会次<span '
@@ -2001,6 +2014,7 @@ def event_series_page(
         hero=hero, title=title, edit_btn=edit_btn,
         total=esc(len(list(editions))),
         albums=esc(sum(int(e.get("count") or 0) for e in editions)),
+        links_block=links_block,
         wiki=wiki_html, editions=editions_html,
     )
     return layout(
