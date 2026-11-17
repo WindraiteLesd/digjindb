@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import unittest
 
-from dnh.public import templates as T
+from dddb.public import templates as T
 
 
 class TestAlbumNames(unittest.TestCase):
