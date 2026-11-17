@@ -29,7 +29,7 @@ def _album(tracks=None, **overrides):
 
 
 def _render(album):
-    from dnh.public import templates as T
+    from dddb.public import templates as T
 
     ctx = T.SiteContext(csrf_token="t", is_editor=True, lang="zh",
                         user={"id": 1, "username": "ed", "role": "editor"})
@@ -95,7 +95,7 @@ class TestTrStructure(unittest.TestCase):
 
     def test_js_puts_hidden_in_td(self) -> None:
         """JS 新增行也要把 hidden 放进 td."""
-        js = (ROOT / "dnh/public/static/public.js").read_text(
+        js = (ROOT / "dddb/public/static/public.js").read_text(
             encoding="utf-8")
         start = js.find("function buildTrackRow")
         end = js.find("\n  function ", start + 10)
@@ -113,7 +113,7 @@ class TestTableVisibility(unittest.TestCase):
     """输入框要可见(不能是透明背景+透明边框)."""
 
     def test_input_has_visible_border(self) -> None:
-        css = (ROOT / "dnh/public/static/public.css").read_text(
+        css = (ROOT / "dddb/public/static/public.css").read_text(
             encoding="utf-8")
         m = re.search(r'\.track-table input\[type="text"\]\s*\{([^}]*)\}',
                       css)
@@ -128,7 +128,7 @@ class TestTableVisibility(unittest.TestCase):
                       "要有可见背景")
 
     def test_table_layout_auto(self) -> None:
-        css = (ROOT / "dnh/public/static/public.css").read_text(
+        css = (ROOT / "dddb/public/static/public.css").read_text(
             encoding="utf-8")
         m = re.search(r"\.track-table\s*\{([^}]*)\}", css)
         self.assertIsNotNone(m)
