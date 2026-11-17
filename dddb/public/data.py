@@ -41,6 +41,7 @@ from .templates import (
     sort_role,
 )
 from ..tagrules import is_useless_tag
+from .eventseries import display_name, parse_event_name
 
 logger = logging.getLogger("dddb.public")
 
@@ -987,6 +988,94 @@ class PublicData:
         return [v for v in views if v.get("key") != key][:limit]
 
     # -- 聚合 ---------------------------------------------------------------
+
+    def event_series(self) -> list[dict[str, Any]]:
+        """展会系列列表(每个系列带它的会次, 供索引页卡片用).
+
+        返回::
+
+            [{"name": 系列名, "abbr": 缩写, "full_name": 全称,
+              "logo": 图地址, "has_logo": bool,
+              "editions": [{"value": 会次名, "display": 展示名, "count": 张数}]}]
+
+        ``count`` 来自 albums 聚合(有多少张专辑)。没有专辑的会次也列出来 ——
+        用户可能已经建了词条但还没关联专辑。
+        """
+        # 专辑数: event -> 张数
+        counts: dict[str, int] = {}
+        try:
+            for row in self._query(
+                    "SELECT event, COUNT(*) AS n FROM albums WHERE event != ''"
+                    " GROUP BY event"):
+                counts[_text(row["event"])] = int(row["n"])
+        except sqlite3.Error:
+            counts = {}
+
+        out: list[dict[str, Any]] = []
+        try:
+            raw_series = self._query(
+                "SELECT * FROM event_series ORDER BY sort_order, name COLLATE NOCASE")
+        except sqlite3.Error:
+            raw_series = []
+
+        for row in raw_series:
+            keys = row.keys()
+            name = _text(row["name"])
+            abbr = _text(row["abbr"]) if "abbr" in keys else ""
+            full = _text(row["full_name"]) if "full_name" in keys else ""
+            logo = ""
+            if "logo_local" in keys and _text(row["logo_local"]):
+                logo = "/event-series-logo/" + quote(name, safe="")
+            elif "logo_url" in keys:
+                logo = safe_url(_text(row["logo_url"]))
+            editions: list[dict[str, Any]] = []
+            try:
+                ev_rows = self._query(
+                    "SELECT * FROM events WHERE series = ?"
+                    " ORDER BY vol DESC, name DESC", (name,))
+            except sqlite3.Error:
+                ev_rows = []
+            for ev in ev_rows:
+                ek = ev.keys()
+                ev_name = _text(ev["name"])
+                if not ev_name:
+                    continue
+                abbr_e = abbr
+                vol_label = _text(ev["vol_label"]) if "vol_label" in ek else ""
+                # 展示名: "[缩写] 会次自己的名字 (会次标签)".
+                #   用**会次名**(如 M3-2026秋 / C108) 而不是系列全称 ——
+                #   系列全称对 M3 这种"每年多届"的系列会退化成某一届的名字,
+                #   导致所有会次显示成同一个。
+                # 中间那段(全称位)取哪个: 会次名通常就对(M3-2026秋),
+                # 但像 "C108" 这种**名字 == 会次标签**的, 用系列全称更好看
+                #   -> [CM] Comic Market (C108)
+                _mid = ev_name
+                if vol_label and (ev_name == vol_label
+                                  or ev_name.replace(" ", "") == vol_label):
+                    _mid = full or name
+                editions.append({
+                    "value": ev_name,
+                    "display": display_name(abbr_e, _mid, vol_label,
+                                             ev_name),
+                    "vol": int(ev["vol"] or 0) if "vol" in ek else 0,
+                    "count": counts.get(ev_name, 0),
+                })
+            out.append({
+                "name": name,
+                "abbr": abbr,
+                "full_name": full or name,
+                "logo": logo,
+                "has_logo": bool(logo),
+                "poster": ("/event-series-poster/" + quote(name, safe=""))
+                if "poster_local" in keys and _text(row["poster_local"]) else
+                (safe_url(_text(row["poster_url"]))
+                 if "poster_url" in keys else ""),
+                "wiki": _text(row["wiki"]) if "wiki" in keys else "",
+                "links": {},
+                "editions": editions,
+                "count": sum(e["count"] for e in editions),
+            })
+        return out
 
     def events(self) -> list[dict[str, Any]]:
         rows = self._query(
