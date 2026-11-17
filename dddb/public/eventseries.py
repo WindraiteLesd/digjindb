@@ -43,6 +43,36 @@ _RE_LETTER_YEAR = re.compile(r"^([A-Za-z][A-Za-z0-9]{0,5})[-_]?(\d{4})\s*(春|�
 _RE_CJK_NUM = re.compile(r"^([^\d]+?)\s*(\d{1,4})$")
 
 
+#: 再贩标记 —— 属于**标签**, 不是会次。形如 "C108(resale)" / "M3-2026秋(再販)"
+_RESALE_RE = re.compile(
+    r"\s*[（(]\s*(?:re-?sale|再販|再贩)\s*[)）]\s*$", re.IGNORECASE)
+_RESALE_TAIL_RE = re.compile(r"\s*(?:再販|再贩)\s*$")
+
+#: 剥出再贩标记后打的标签
+RESALE_TAG = "再贩"
+
+
+def split_resale(event: Any) -> tuple[str, bool]:
+    """把 event 名里的再贩标记剥出来.
+
+    "C108(resale)" -> ("C108", True)
+
+    再贩的含义是"这张专辑不是在本会次首发, 而是已发行过的碟在该会次再贩" ——
+    它是**专辑的属性(标签)**, 不是新的会次。所以 event 要去掉标记归到原会次,
+    tags 加上 :data:。
+    """
+    text = str(event or "").strip()
+    if not text:
+        return "", False
+    cleaned = _RESALE_RE.sub("", text)
+    if cleaned != text:
+        return cleaned.strip(), True
+    cleaned = _RESALE_TAIL_RE.sub("", text)
+    if cleaned != text:
+        return cleaned.strip(), True
+    return text, False
+
+
 def parse_event_name(name: Any) -> dict[str, Any]:
     """把展会名拆成 ``{series, abbr, full_name, vol, vol_label}``.
 
