@@ -3063,3 +3063,5 @@ tr.track-item.is-open .track-toggle { transform: rotate(90deg); }
   .series-grid { grid-template-columns: minmax(0, 1fr); }
   .series-edit-image-row { flex-direction: column; }
 }
+/* 系列详情页的相关链接(hero 下方, 居中) */
+.series-links { justify-content: center; margin: 10px 0 0; }
