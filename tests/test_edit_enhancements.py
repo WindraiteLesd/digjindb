@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def _render(**album_overrides):
-    from dnh.public import templates as T
+    from dddb.public import templates as T
 
     album = {
         "key": "d", "title": "T", "title_original": "T", "title_alt": "",
@@ -37,11 +37,11 @@ def _render(**album_overrides):
 
 
 def _js() -> str:
-    return (ROOT / "dnh/public/static/public.js").read_text(encoding="utf-8")
+    return (ROOT / "dddb/public/static/public.js").read_text(encoding="utf-8")
 
 
 def _css() -> str:
-    return (ROOT / "dnh/public/static/public.css").read_text(encoding="utf-8")
+    return (ROOT / "dddb/public/static/public.css").read_text(encoding="utf-8")
 
 
 class TestPeopleChips(unittest.TestCase):
