@@ -52,8 +52,8 @@ python -m dddb public --root . --host 127.0.0.1 --port 8940
 
 | 参数 | 默认值 | 说明 |
 |---|---|---|
-| `--root` | 当前目录 | 站点根目录（含 `dnh/` 与 `data/`） |
-| `--db` | `<root>/data/dnh.sqlite3` | 专辑库（**只读打开**） |
+| `--root` | 当前目录 | 站点根目录（含 `dddb/` 与 `data/`） |
+| `--db` | `<root>/data/dddb.sqlite3` | 专辑库（**只读打开**） |
 | `--users-db` | `<root>/data/public_users.sqlite3` | 用户库 |
 | `--sessions-db` | `<root>/data/sessions.sqlite3` | 会话库 |
 | `--covers-dir` | `<root>/data/covers` | 封面缓存目录 |
@@ -77,7 +77,7 @@ www.example.com {
 
 ## 数据
 
-`data/dnh.sqlite3` 是专辑库。数据库为空的站点可以启动，但列表与详情页都是空的。
+`data/dddb.sqlite3` 是专辑库。数据库为空的站点可以启动，但列表与详情页都是空的。
 
 站点通过编辑端维护数据：任何有权编辑的用户都可以在 `/album/<key>/edit`
 修改专辑信息，每次保存都会留一条修订记录。
@@ -85,7 +85,7 @@ www.example.com {
 ## 目录结构
 
 ```
-dnh/
+dddb/
   public/          站点
     site.py        路由 + HTTP 服务 + 安全头
     templates.py   全部 HTML 模板（纯函数）
