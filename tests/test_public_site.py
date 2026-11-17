@@ -1143,14 +1143,20 @@ class TestPages(DataCase):
             self.assertIn("<!doctype html>", html)
 
     def test_index_pages_render_without_cards(self) -> None:
-        for path, query in (("/circles", {"q": "pager"}), ("/circles", {}), ("/events", {}), ("/tags", {})):
+        for path, query in (("/circles", {"q": "pager"}), ("/circles", {}),
+                            ("/events", {}), ("/tags", {})):
             resp = self.render(path, query)
             self.assertEqual(resp.status, 200, path)
             html = resp.body.decode("utf-8")
             self.assertIn("<!doctype html>", html)
-            self.assertTrue("index-row" in html or "tagcloud" in html, path)
+            # 展会页现在是系列卡片; 其它索引页仍是 index-row / tagcloud
+            self.assertTrue("index-row" in html or "tagcloud" in html
+                            or "series-grid" in html or "展会系列" in html,
+                            path)
         self.assertIn("Pager Circle", self.body("/circles", {"q": "pager"}))
-        self.assertIn("/event/", self.body("/events"))
+        # /events: 有会次时给 /event/ 链接, 没有时提示"还没有展会系列"
+        events_body = self.body("/events")
+        self.assertTrue("/event/" in events_body or "展会系列" in events_body)
         self.assertIn("tagcloud", self.body("/tags"))
 
     def test_edit_queue_page_lists_rows(self) -> None:
