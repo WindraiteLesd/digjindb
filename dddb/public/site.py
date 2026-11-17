@@ -758,6 +758,23 @@ def parse_duration(value: str) -> tuple[int | None, bool]:
     return (seconds, True) if seconds <= 24 * 3600 else (None, False)
 
 
+def normalize_resale_event(event: Any,
+                           tags: Any) -> tuple[str, list[str]]:
+    """把 event 里的再贩标记移到标签里.
+
+    ``"C108(resale)"`` + ``["J-pop"]`` -> ``("C108", ["J-pop", "再贩"])``
+
+    再贩不是新会次, 而是"这张碟在本会次再贩"这个属性 —— 所以归入标签。
+    """
+    from .eventseries import RESALE_TAG, split_resale
+
+    base, was = split_resale(event)
+    out = [str(t).strip() for t in (tags or ()) if str(t).strip()]
+    if was and RESALE_TAG not in out:
+        out.append(RESALE_TAG)
+    return base, out
+
+
 def parse_album_form(
     values: Mapping[str, Sequence[str]],
     current: Mapping[str, Any] | None = None,
@@ -886,6 +903,9 @@ def parse_album_form(
         # 全部留空 = 明确要清空曲目表(表单里原有曲目是预填的, 不会误删)
         pass
 
+    # 再贩标记归入标签: "C108(resale)" -> event="C108" + tags += 再贩
+    _ev, _tags = normalize_resale_event(text_field(values, "event"), index)
+
     patch: dict[str, Any] = {
         "title_original": title_original or title,
         "title": title or title_original,
@@ -893,13 +913,13 @@ def parse_album_form(
         "circle": text_field(values, "circle"),
         "artists": split_list(text_field(values, "artists")),
         "release_date": release_date,
-        "event": text_field(values, "event"),
+        "event": _ev,  # (resale) 已归入标签, 见下方 _ev/_tags 计算
         "catalog_no": text_field(values, "catalog_no"),
         "company": text_field(values, "company"),
         "price": text_field(values, "price"),
         "hall": text_field(values, "hall"),
         "booth": text_field(values, "booth"),
-        "tags": index,
+        "tags": _tags,
         "genres": genres,
         "description": raw_field(values, "description").strip(),
     }
