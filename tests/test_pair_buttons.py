@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def _js() -> str:
-    return (ROOT / "dnh/public/static/public.js").read_text(encoding="utf-8")
+    return (ROOT / "dddb/public/static/public.js").read_text(encoding="utf-8")
 
 
 def _boot_block() -> str:
@@ -32,7 +32,7 @@ def _boot_block() -> str:
 
 
 def _edit_html():
-    from dnh.public import templates as T
+    from dddb.public import templates as T
 
     album = {
         "key": "d", "title": "T", "title_original": "T", "title_alt": "",
@@ -167,7 +167,7 @@ class TestClearSemanticsBackend(unittest.TestCase):
     """后端: 字段缺失=没改动, 字段存在但空=清空."""
 
     def test_missing_fields_keep_original(self) -> None:
-        from dnh.public.site import parse_album_form
+        from dddb.public.site import parse_album_form
 
         patch, _ = parse_album_form({"title": ["T"],
                                      "title_original": ["T"]})
@@ -175,7 +175,7 @@ class TestClearSemanticsBackend(unittest.TestCase):
         self.assertNotIn("urls", patch)
 
     def test_present_but_empty_clears(self) -> None:
-        from dnh.public.site import parse_album_form
+        from dddb.public.site import parse_album_form
 
         patch, _ = parse_album_form({
             "title": ["T"], "title_original": ["T"],
@@ -186,7 +186,7 @@ class TestClearSemanticsBackend(unittest.TestCase):
         self.assertEqual(patch.get("urls"), {})
 
     def test_normal_values(self) -> None:
-        from dnh.public.site import parse_album_form
+        from dddb.public.site import parse_album_form
 
         patch, _ = parse_album_form({
             "title": ["T"], "title_original": ["T"],
