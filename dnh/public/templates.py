@@ -544,11 +544,11 @@ def layout(
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
 <title>{esc(title)} · {esc(ctx.site_name)}</title>
-<link rel="stylesheet" href="/static/public.css?v=48">
+<link rel="stylesheet" href="/static/public.css?v=50">
 <!-- ?v=2: 图标换过, 但静态资源被 CF/浏览器缓存 1 天, 加版本号强制刷新 -->
 <link rel="icon" href="/static/favicon.svg?v=2" type="image/svg+xml">
 <!-- 唯一的脚本: 同源外链, 只做渐进增强(CSP 只给 script-src 'self') -->
-<script src="/static/public.js?v=41" defer></script>
+<script src="/static/public.js?v=42" defer></script>
 </head>
 <body{_bg_attr(ctx)}>
 <a class="skip" href="#content">跳到正文</a>
@@ -1638,6 +1638,9 @@ def album_detail_page(
         # 容器, 会把按钮和 iframe 拉成同一行, 按钮被 iframe 高度撑长)。
         embeds_html = ('<div class="embed-list">' + "".join(_embeds)
                        + "</div>") if _embeds else ""
+        # **embed code 的条目不出按钮**: 它已经有下方播放器承载,
+        #   再把用户填的名字(如 "Embed Code (Youtube)")显示出来既冗余又暴露实现细节。
+        #   所以只渲染普通外链按钮; embed 条目靠 embed-list 呈现。
         links_html = "".join(
             '<a class="link-pill" href="{}" data-external="1"'
             ' rel="nofollow noopener">{}</a>'.format(
@@ -1646,9 +1649,14 @@ def album_detail_page(
                 esc(_link_label(link, int(link.get("position") or index))),
             )
             for index, link in enumerate(links, 1)
+            if not str(link.get("embed") or "")
         )
+        # 全是 embed code 时按钮区为空: 不要留一个空 div, 直接不输出
+        links_block = ('<div class="links">{}</div>'.format(links_html)
+                       if links_html else "")
     else:
-        links_html = '<span class="muted">没有外链记录。</span>'
+        links_html = ""
+        links_block = '<span class="muted">没有外链记录。</span>'
         embeds_html = ""
 
     description = album.get("description") or ""
@@ -1743,7 +1751,7 @@ def album_detail_page(
   </summary>
   <div class="fold-body">{tracks_html}</div>
 </details>
-<section class="panel"><h2 class="section-title">{i18n.translate("section.links", ctx.lang)}</h2><div class="links">{links_html}</div>{embeds_html}</section>
+<section class="panel"><h2 class="section-title">{i18n.translate("section.links", ctx.lang)}</h2>{links_block}{embeds_html}</section>
 {related_html}"""
     body = body + comments_section(
         ctx, album=album, comments=comments,
