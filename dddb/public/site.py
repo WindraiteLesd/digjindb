@@ -342,7 +342,9 @@ _ROUTE_MAP = {
     # 展会词条的本地图片
     "event-logo": "event_logo",
     # 展会**系列**: 详情页与图片
-    "event-series": "event_series_page",
+    # event-series 用**基础名** event_series: 下面的分支再细分
+    # /<name> /<name>/edit /new, 直接把 name 设成最终路由会让 /edit 失效
+    "event-series": "event_series",
     "event-series-logo": "event_series_logo",
     "event-series-poster": "event_series_poster",
     "like": "comment_like",
@@ -428,11 +430,14 @@ def parse_route(path: str) -> dict[str, str]:
     if name == "embed" and len(rest) >= 2:
         return {"name": "embed", "arg": "/".join(rest)}
     # 展会系列: /event-series/<name>/edit 与 /event-series/new
-    if name == "event-series":
+    if name == "event_series":
         if len(rest) == 1 and rest[0].lower() == "new":
             return {"name": "event_series_edit", "arg": "", "new": True}
         if len(rest) >= 2 and rest[-1].lower() == "edit":
             return {"name": "event_series_edit", "arg": "/".join(rest[:-1])}
+        if rest:
+            return {"name": "event_series_page", "arg": "/".join(rest)}
+        return {"name": "events", "arg": ""}
     if name == "album" and len(rest) >= 2 and rest[-1].lower() == "history":
         return {"name": "album_history", "arg": "/".join(rest[:-1])}
     # 展会名 -> 日期(编辑页"发售日自动匹配"用, 只读)
