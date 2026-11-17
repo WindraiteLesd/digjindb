@@ -47,7 +47,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 from xml.sax.saxutils import escape as xml_escape
 
-from .eventseries import parse_event_name
+from .eventseries import parse_event_name, vol_from_label
 from . import auth
 from . import templates as T
 
@@ -4694,26 +4694,25 @@ class PublicSite:
                     year = int(field("year") or 0)
                 except ValueError:
                     year = 0
-                # 没填会次号就按名字自动解析(与迁移同一套规则)
+                # 会次号/系列: 表单只填「会次标签」, 会次号从标签反推
+                # (避免同一件事填两遍 —— 用户反馈"会次号、标签和会次标签重复")
                 _info = parse_event_name(name)
+                _vol_label = (field("vol_label").strip()
+                              or _info["vol_label"])
                 _series = (field("series").strip() or _info["series"])
-                try:
-                    _vol = int(field("vol").strip() or _info["vol"] or 0)
-                except ValueError:
-                    _vol = int(_info["vol"] or 0)
+                _vol = _info["vol"] or vol_from_label(_vol_label)
                 store.save_event(
-                    name, kind=field("kind"), year=year,
+                    name, kind="", year=year,
                     season=field("season"),
                     start_date=field("start_date"),
                     end_date=field("end_date"),
                     tags=self._split_names(field("tags")),
-                    logo_url=field("logo_url"),
                     links=self._parse_urls(field("links")),
-                    series=_series, vol=_vol,
-                    vol_label=(field("vol_label").strip()
-                               or _info["vol_label"]))
+                    series=_series, vol=_vol, vol_label=_vol_label)
                 created_name = name
                 target = "/event/" + T.quote_segment(name)
+                # 会次图: 随表单上传
+                self._save_event_logo_file(name, values)
             elif kind == "tag":
                 name = field("name")
                 if not name:
@@ -4754,6 +4753,11 @@ class PublicSite:
             limits = {"circle": 500, "artist": 2000, "event": 500, "tag": 500}
             for kind in ("circle", "artist", "event", "tag"):
                 out[kind] = store.entity_list(kind, limit=limits[kind])
+            # 会次表单的「所属系列」下拉: 直接给系列名 + 缩写
+            out["event_series"] = [
+                {"name": x["name"], "abbr": str(x.get("abbr") or "")}
+                for x in store.list_series()
+            ]
             return out
         except Exception:                       # noqa: BLE001 - 只读库缺表时降级
             return {}
@@ -4858,9 +4862,33 @@ class PublicSite:
                               status=403, cookies=cookies)
         values = self._entity_form_values(kind, name)
         back = f'/{kind}/' + T.quote_segment(name)
+        # 会次表单要: 系列下拉 + 已有图的预览
+        series_options: list[dict[str, Any]] = []
+        has_logo = False
+        if kind == "event":
+            from dddb.db import Store as _Store
+
+            if self.db_path is not None:
+                store = _Store(self.db_path)
+                try:
+                    series_options = [
+                        {"name": x["name"], "abbr": str(x.get("abbr") or "")}
+                        for x in store.list_series()
+                    ]
+                    row = store.query_one(
+                        "SELECT logo_local FROM events WHERE name = ?", (name,))
+                    has_logo = bool(row is not None
+                                    and str(row["logo_local"] or ""))
+                except Exception:            # noqa: BLE001
+                    pass
+                finally:
+                    store.close()
         return self._html(T.edit_profile_page(
-            self.context(state, active="edit"), kind, values["name"] if values else name,
-            values=values, notice=notice, back_url=back), cookies=cookies)
+            self.context(state, active="edit"), kind,
+            values["name"] if values else name,
+            values=values, notice=notice, back_url=back,
+            series_options=series_options, has_logo=has_logo),
+            cookies=cookies)
 
     def _do_entity_update(self, kind: str, name: str, values: Mapping[str, Any],
                           state: auth.AuthState, cookies: list[str]) -> Response:
@@ -4875,6 +4903,9 @@ class PublicSite:
         from dddb.models import Circle
         store = _Store(self.db_path)
         try:
+            if kind == "event" and isinstance(values.get("logo"), Mapping):
+                # 会次图: 先落盘, 随后在保存时写回 logo_local
+                self._save_event_logo_file(name, values)
             if kind == "artist":
                 ok, message = store.upsert_artist(name, {
                     "name_en": text_field(values, "name_en").strip(),
@@ -4915,21 +4946,17 @@ class PublicSite:
                               if str(e.get("name")) == name), {}) or {}
                 _has_logo_field = "logo_url" in values
                 _has_links_field = "links" in values
-                # 系列/会次号: 表单没带就保留原值
+                # 系列/会次号: 表单没带就保留原值; 会次号从标签反推
                 _info = parse_event_name(name)
                 _series = (text_field(values, "series").strip()
                            if "series" in values
                            else str(_prev.get("series") or _info["series"]))
-                try:
-                    _vol = (int(text_field(values, "vol").strip() or 0)
-                            if "vol" in values
-                            else int(_prev.get("vol") or _info["vol"] or 0))
-                except ValueError:
-                    _vol = int(_prev.get("vol") or _info["vol"] or 0)
                 _vol_label = (text_field(values, "vol_label").strip()
                               if "vol_label" in values
                               else str(_prev.get("vol_label")
                                        or _info["vol_label"]))
+                _vol = (_info["vol"] or vol_from_label(_vol_label)
+                        or int(_prev.get("vol") or 0))
                 store.save_event(
                     name, kind=text_field(values, "kind").strip(), year=year,
                     season=text_field(values, "season").strip(),
@@ -5215,6 +5242,77 @@ class PublicSite:
             state.session.flash = "展会系列已保存"
         return Response.redirect(
             "/event-series/" + T.quote_segment(target_name), status=303)
+
+    def _save_event_logo_file(self, name: str,
+                              values: Mapping[str, Any]) -> str:
+        """保存会次图片(``name="logo"``), 写回 ``events.logo_local``.
+
+        与会系列图片同一套路径(covers/ 下), 失败只记日志 ——
+        图存不下来不该让会次创建失败。
+        """
+        raw = values.get("logo")
+        if not isinstance(raw, Mapping):
+            return ""
+        blob = raw.get("data") or b""
+        if not blob or len(blob) > 2 * 1024 * 1024:
+            return ""
+        mime = str(raw.get("content_type") or "").split(";")[0].strip().lower()
+        ext = {"image/png": ".png", "image/jpeg": ".jpg",
+               "image/webp": ".webp"}.get(mime)
+        if ext is None:
+            return ""
+        covers = getattr(self.data, "covers_dir", None)
+        base = Path(covers) if covers else Path(self.db_path).parent / "covers"
+        folder = base / "events"
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+            stem = re.sub(r"[^A-Za-z0-9._-]+", "-", str(name))[:80] or "event"
+            target = folder / "{}{}".format(stem, ext)
+            target.write_bytes(blob)
+        except OSError:                      # pragma: no cover
+            return ""
+        if self.db_path is None:
+            return str(target)
+        from dddb.db import Store as _Store
+
+        store = _Store(self.db_path)
+        try:
+            row = store.query_one(
+                "SELECT * FROM events WHERE name = ?", (str(name),))
+            if row is not None:
+                keys = row.keys()
+
+                def _v(key: str, default: Any = "") -> Any:
+                    return row[key] if key in keys else default
+
+                try:
+                    _tags = json.loads(_v("tags", "[]") or "[]")
+                except ValueError:
+                    _tags = []
+                try:
+                    _links = json.loads(_v("links_json", "{}") or "{}")
+                except ValueError:
+                    _links = {}
+                store.save_event(
+                    str(name), kind=str(_v("kind")),
+                    year=int(_v("year", 0) or 0),
+                    season=str(_v("season")),
+                    start_date=str(_v("start_date")),
+                    end_date=str(_v("end_date")),
+                    tags=_tags if isinstance(_tags, list) else [],
+                    logo_url=str(_v("logo_url")),
+                    logo_local=str(target),
+                    links=_links if isinstance(_links, dict) else {},
+                    series=str(_v("series")),
+                    vol=int(_v("vol", 0) or 0),
+                    vol_label=str(_v("vol_label")))
+        finally:
+            store.close()
+        try:
+            self.data.invalidate()
+        except Exception:                    # noqa: BLE001
+            pass
+        return str(target)
 
     def _save_series_image(self, name: str, kind: str,
                            values: Mapping[str, Any]) -> str:
