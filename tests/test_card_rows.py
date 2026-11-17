@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def _css() -> str:
-    return (ROOT / "dnh/public/static/public.css").read_text(encoding="utf-8")
+    return (ROOT / "dddb/public/static/public.css").read_text(encoding="utf-8")
 
 
 def _position(name: str) -> str:
