@@ -6,7 +6,7 @@ import re
 import unittest
 from pathlib import Path
 
-from dnh.public import embed as EB
+from dddb.public import embed as EB
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -14,7 +14,7 @@ BASE_TS = 1794900000.0
 
 
 def _detail(urls):
-    from dnh.public import templates as T
+    from dddb.public import templates as T
 
     ctx = T.SiteContext(csrf_token="t", is_editor=False, lang="zh")
     return T.album_detail_page(ctx, album={
@@ -25,7 +25,7 @@ def _detail(urls):
 
 
 def _detail(urls):
-    from dnh.public import templates as T
+    from dddb.public import templates as T
 
     ctx = T.SiteContext(csrf_token="t", is_editor=False, lang="zh")
     return T.album_detail_page(ctx, album={
@@ -120,7 +120,7 @@ class TestEmbedRender(unittest.TestCase):
 
     def _urls(self):
         # embed_src 由 data 层从 embed code 抽出后提供(模板直接用它当 iframe src)
-        from dnh.public.embed import extract_embed
+        from dddb.public.embed import extract_embed
 
         def row(name, raw, href, pos):
             info = extract_embed(raw) or {}
@@ -224,7 +224,7 @@ class TestEmbedRoute(unittest.TestCase):
     """服务端 /embed 路由."""
 
     def test_route_registered(self) -> None:
-        from dnh.public import site as SITE
+        from dddb.public import site as SITE
 
         self.assertEqual(SITE._ROUTE_MAP.get("embed"), "embed")
         self.assertIn("embed", SITE._ENTITY_ROUTES)
@@ -234,7 +234,7 @@ class TestEmbedRoute(unittest.TestCase):
         """必须在 _handle_read(返回 Response)里分发, 不能在 render_page."""
         import inspect
 
-        from dnh.public import site as SITE
+        from dddb.public import site as SITE
 
         self.assertIn('"embed"',
                       inspect.getsource(SITE.PublicSite._handle_read))
@@ -245,7 +245,7 @@ class TestEmbedRoute(unittest.TestCase):
         """纯链接没有播放器 -> /embed 也 404。"""
         import inspect
 
-        from dnh.public import site as SITE
+        from dddb.public import site as SITE
 
         src = inspect.getsource(SITE.PublicSite.serve_embed)
         self.assertIn("extract_embed", src)
@@ -253,7 +253,7 @@ class TestEmbedRoute(unittest.TestCase):
 
     def test_csp_allows_platform_frames(self) -> None:
         """CSP 必须放行平台域, 否则 iframe 被拦。"""
-        from dnh.public import site as SITE
+        from dddb.public import site as SITE
 
         self.assertIn("frame-src 'self'", SITE._CSP)
         for domain in ("https://www.youtube.com",
@@ -264,7 +264,7 @@ class TestEmbedRoute(unittest.TestCase):
 
     def test_csp_does_not_allow_blocked_hosts(self) -> None:
         """被禁来源站不能进 CSP。"""
-        from dnh.public import site as SITE
+        from dddb.public import site as SITE
 
         for domain in ("某站点.net", "某站点", "某站点.com"):
             self.assertNotIn(domain, SITE._CSP)
@@ -286,7 +286,7 @@ class TestGroupRevisions(unittest.TestCase):
         ]
 
     def test_same_user_folded(self) -> None:
-        from dnh.public.templates import group_revisions
+        from dddb.public.templates import group_revisions
 
         groups = group_revisions(self._revs())
         alice = groups[0]
@@ -296,7 +296,7 @@ class TestGroupRevisions(unittest.TestCase):
         self.assertEqual(alice["first"]["id"], 9, "first 是最新那条")
 
     def test_different_user_breaks_group(self) -> None:
-        from dnh.public.templates import group_revisions
+        from dddb.public.templates import group_revisions
 
         groups = group_revisions(self._revs())
         self.assertEqual(len(groups), 2)
@@ -305,7 +305,7 @@ class TestGroupRevisions(unittest.TestCase):
 
     def test_far_apart_not_folded(self) -> None:
         """超出 10 分钟不折叠。"""
-        from dnh.public.templates import group_revisions
+        from dddb.public.templates import group_revisions
 
         revs = [
             {"id": 2, "username": "alice", "created_at": BASE_TS,
@@ -318,19 +318,19 @@ class TestGroupRevisions(unittest.TestCase):
         self.assertFalse(groups[0]["folded"])
 
     def test_single_revision(self) -> None:
-        from dnh.public.templates import group_revisions
+        from dddb.public.templates import group_revisions
 
         groups = group_revisions([self._revs()[0]])
         self.assertEqual(len(groups), 1)
         self.assertFalse(groups[0]["folded"])
 
     def test_empty(self) -> None:
-        from dnh.public.templates import group_revisions
+        from dddb.public.templates import group_revisions
 
         self.assertEqual(group_revisions([]), [])
 
     def test_span_calculated(self) -> None:
-        from dnh.public.templates import group_revisions
+        from dddb.public.templates import group_revisions
 
         groups = group_revisions(self._revs())
         self.assertAlmostEqual(groups[0]["span"], 300.0, delta=1)
@@ -340,7 +340,7 @@ class TestHistoryRender(unittest.TestCase):
     """修订页渲染折叠行。"""
 
     def _render(self, revs):
-        from dnh.public import templates as T
+        from dddb.public import templates as T
 
         ctx = T.SiteContext(csrf_token="t", is_editor=True, lang="zh")
         return T.history_page(ctx, album={"key": "k", "title": "T"},
@@ -392,7 +392,7 @@ class TestHistoryRender(unittest.TestCase):
 
 class TestHistoryCss(unittest.TestCase):
     def test_styles(self) -> None:
-        css = (ROOT / "dnh/public/static/public.css").read_text(
+        css = (ROOT / "dddb/public/static/public.css").read_text(
             encoding="utf-8")
         for token in (".hist-fold-badge", ".hist-fold-span",
                       ".hist-fold-detail", ".hist-fold-items",
@@ -409,7 +409,7 @@ class TestEmbedSave(unittest.TestCase):
           'embed/l1JRKYl5CeM" frameborder="0" allowfullscreen></iframe>')
 
     def _parse(self, urls):
-        from dnh.public.site import parse_album_form
+        from dddb.public.site import parse_album_form
 
         return parse_album_form({
             "title_original": "T",
