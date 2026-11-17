@@ -1,6 +1,6 @@
 """SQLite 持久层.
 
-聚合结果、X 动态、网易云匹配与操作记录全部落库, 保证多次运行可增量继续.
+聚合结果、X 动态、外部匹配与操作记录全部落库, 保证多次运行可增量继续.
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ from .models import (
 )
 #: "人工匹配"的 method 标记 —— 与匹配器共用同一个常量(只此一处定义)。
 #: 依赖方向是 db -> netease.matcher, 反方向不存在(matcher 不碰库), 所以没有环。
-#: 采集端(网易云匹配)不在公开仓库里时, 用同样的字面值兜底 ——
+#: 采集端(外部匹配)不在公开仓库里时, 用同样的字面值兜底 ——
 #: 它只用于判定"这条匹配是人工确认的", 公开只读站点走不到那些写路径。
 try:
     from .netease.matcher import MANUAL_METHOD
@@ -125,10 +125,10 @@ _VGMDB_NOTE_MARKERS = (
 )
 
 
-def _looks_like_vgmdb_notes(text: str) -> bool:
+def _looks_like_某站点_notes(text: str) -> bool:
     """这段文字是不是被误当简介存进去的 VGMdb Notes.
 
-    旧数据里没有 ``raw["vgmdb_notes"]`` 可以对照, 所以用特征识别 ——
+    旧数据里没有 ``raw["某站点_notes"]`` 可以对照, 所以用特征识别 ——
     Notes 是版权/出处/分工的堆砌, 真正的简介不会出现 ``Originated from`` 这类字样。
     """
     lowered = (text or "").lower()
@@ -433,8 +433,8 @@ CREATE TABLE IF NOT EXISTS netease_matches (
 );
 CREATE INDEX IF NOT EXISTS idx_matches_score ON netease_matches(score);
 
--- 「网易云查过但没有」的**带时效**负缓存。
--- 为什么必须有 TTL: 网易云的艺人/社团条目是**用户随时创建**的, 今天查不到不代表
+-- 「外部音乐库查过但没有」的**带时效**负缓存。
+-- 为什么必须有 TTL: 外部音乐库的艺人/社团条目是**用户随时创建**的, 今天查不到不代表
 -- 下个月还没有。永久缓存会让我们永久错过后来才出现的条目, 所以只记一段时间。
 CREATE TABLE IF NOT EXISTS netease_misses (
     kind       TEXT NOT NULL,        -- artist / album ...
@@ -445,7 +445,7 @@ CREATE TABLE IF NOT EXISTS netease_misses (
 
 CREATE INDEX IF NOT EXISTS idx_misses_checked ON netease_misses(checked_at);
 
--- **人工「拉黑」的持久记录** —— 「这张本地碟 ← 不要再匹配那一条网易云条目」.
+-- **人工「拉黑」的持久记录** —— 「这张本地碟 ← 不要再匹配那一条外部音乐库条目」.
 --
 -- 这是人的判断, 不是机器缓存, 所以**没有 TTL**。
 --
@@ -778,7 +778,7 @@ class Store:
         album.tags = [t for t in split_tag_values(album.tags) if is_tag_worth_keeping(t)]
         album.genres = [g for g in split_tag_values(album.genres) if not is_noise_genre(g)]
         # **来源痕迹收口**: 所有数据源都走这一个写入口, 所以在这里统一剔除
-        # VGMdb / Bangumi / DoujinStyle 的链接、编号与"提供的格式"之类说明,
+        # VGMdb / Bangumi / 某站点 的链接、编号与"提供的格式"之类说明,
         # 保证任何入库路径(采集/手动上传/歌单反向导入)都不会把它们带进库。
         try:
             _scrub_album_sources(album)
@@ -1092,7 +1092,7 @@ class Store:
             row = self.query_one(f"SELECT COUNT(*) AS n FROM {table}")
             out[table] = int(row["n"]) if row else 0
         # **已匹配但没封面** —— 这些碟在歌单对照里会显示"无封面", 而它们本来可以
-        # 直接用网易云的专辑图。单独报出来, 省得又变成"为什么有匹配却没图"。
+        # 直接用外部音乐库的专辑图。单独报出来, 省得又变成"为什么有匹配却没图"。
         row = self.query_one(
             "SELECT COUNT(*) AS n FROM netease_matches m JOIN albums a ON a.key = m.album_key"
             " WHERE a.cover_url = '' AND a.cover_local = ''"
@@ -1452,7 +1452,7 @@ class Store:
                     removed = False
         return ok, old_local, removed
 
-    # -- 网易云匹配 ---------------------------------------------------------
+    # -- 外部匹配 ---------------------------------------------------------
 
     def save_match(self, match: MatchResult) -> None:
         payload = json.dumps(match.to_dict(), ensure_ascii=False)
@@ -1817,7 +1817,7 @@ class Store:
 
     # -- 「查过但没有」的带时效负缓存 ------------------------------------------
     #
-    # 网易云的艺人/社团条目是**用户随时创建**的: 同一批专辑里, 有的社团今天还没有
+    # 外部音乐库的艺人/社团条目是**用户随时创建**的: 同一批专辑里, 有的社团今天还没有
     # 条目, 几个月后就有了。所以负结果只能记住一段时间, 不能永久记 ——
     # 否则会永久错过后来才出现的条目。
 
@@ -1876,11 +1876,11 @@ class Store:
             sql += f" LIMIT {int(limit)}"
         return [MatchResult.from_dict(json.loads(r["payload"])) for r in self.query(sql, (float(min_score),))]
 
-    # -- 人工拉黑(**对级**: 本地专辑 × 网易云 album_id) -------------------------
+    # -- 人工拉黑(**对级**: 本地专辑 × 外部音乐库 album_id) -------------------------
     #
     # 与上面的 ``netease_matches`` 不同, 这张表记的是**人的决定**, 所以:
     # * **没有 TTL** —— 机器缓存会过期, 人的"不要这一条"不该自己失效;
-    # * 只在用户显式操作时写入(面板"取消网易云匹配" / ``dnh db unmatch``);
+    # * 只在用户显式操作时写入(面板"取消外部匹配" / ``dnh db unmatch``);
     # * 只在用户显式操作时清除(面板"允许重新匹配/解禁" / ``dnh db rematch``)。
     #
     # **粒度是对, 不是整张碟**(用户纠正过的意图): 用户拒的往往是某一条同名错条, 正确条目
@@ -2152,7 +2152,7 @@ class Store:
         if album.edited:
             return False, "人工编辑过, 跳过"
         # 封面单独处理: 只在"当前没有"或"当前是占位图"时才用新封面覆盖,
-        # 已有的封面(可能是 bgm.tv 的高清图或用户上传的)不碰。
+        # 已有的封面(可能是 某站点 的高清图或用户上传的)不碰。
         fresh_cover = (getattr(fresh, "cover_url", "") or "").strip()
         bad_markers = ("nocover", "/db/icons/", "/db/img/")
         if fresh_cover and not any(m in fresh_cover.lower() for m in bad_markers):
@@ -2176,14 +2176,14 @@ class Store:
                     album.tracks = list(value)
                 continue
             if name == "description":
-                # 简介是"多源择优"的字段: 重新解析 vgmdb 时 fresh.description 通常是空的,
-                # 直接清空会连 bgm.tv / 特设页写好的简介一起洗掉。
+                # 简介是"多源择优"的字段: 重新解析 某站点 时 fresh.description 通常是空的,
+                # 直接清空会连 某站点 / 特设页写好的简介一起洗掉。
                 # 只在这种情况下才清: 当前简介其实就是旧的 VGMdb Notes(被误当简介存进去的)。
                 current = (album.description or "").strip()
-                legacy_notes = str((album.raw or {}).get("vgmdb_notes") or "").strip()
+                legacy_notes = str((album.raw or {}).get("某站点_notes") or "").strip()
                 if value:
                     album.description = value
-                elif current and (current == legacy_notes or _looks_like_vgmdb_notes(current)):
+                elif current and (current == legacy_notes or _looks_like_某站点_notes(current)):
                     album.description = ""
                 continue
             if value or name == "urls":
@@ -2429,7 +2429,7 @@ class Store:
     def merge_albums(self, keep_key: str, drop_key: str) -> bool:
         """把 ``drop_key`` 并进 ``keep_key``(去重清理用), 然后删掉被并的那条.
 
-        保留项的字段优先; 它缺的字段用被并项补。依赖表(来源/标记/网易云匹配)
+        保留项的字段优先; 它缺的字段用被并项补。依赖表(来源/标记/外部匹配)
         一并迁移, 否则删掉被并项会留下孤儿行。
         """
         keep = self.get_album(keep_key)
@@ -3349,16 +3349,16 @@ def _parse_ts(value: str) -> float:
 
 #: 只应保存在本地站长端的"来源数据库"域名(云端库要全部清除)
 SOURCE_HOSTS: tuple[str, ...] = (
-    "vgmdb.net",
-    "vgmdb.info",
-    "bgm.tv",
-    "bangumi.tv",
-    "bangumi.biz",
+    "某站点.net",
+    "某站点.info",
+    "某站点",
+    "某站点.tv",
+    "某站点.biz",
     "chii.in",
-    "lain.bgm.tv",
-    # 第三个采集源: doujinstyle —— 之前漏了, 导致 105 张专辑还带着它的链接
-    "doujinstyle.com",
-    "doujinstyle",
+    "lain.某站点",
+    # 第三个采集源: 某站点 —— 之前漏了, 导致 105 张专辑还带着它的链接
+    "某站点.com",
+    "某站点",
     "doujin-styler",
 )
 
@@ -3378,7 +3378,7 @@ def url_from_source_host(url: str, hosts: tuple[str, ...] = SOURCE_HOSTS) -> boo
 
 #: 云端**不应该保留**的来源数据库标识(外链 + source_ids 键)
 SOURCE_ID_KEYS: tuple[str, ...] = (
-    "vgmdb", "bgm", "bgmtv", "bangumi", "bangumi_tv", "doujinstyle",
+    "某站点", "bgm", "bgmtv", "某站点", "某站点_tv", "某站点",
     "dojinmusic", "doujinmusic",
 )
 #: 只存在于 payload 里的"来源"痕迹(逐条记录/原始抓取/可信度)
@@ -3434,14 +3434,14 @@ def _scrub_source_meta(value: Any, hosts: tuple[str, ...],
 #: 描述里常见的来源库说明(采集器写进去的, 属于来源痕迹, 不该出现在云端)
 #: 描述里常见的来源库说明(采集器写进去的, 属于来源痕迹, 不该出现在云端).
 #:
-#: 只匹配**整行就是一句来源说明**的情况, 例如 ``DoujinStyle 提供的格式: FLAC``;
-#: 不能写成宽泛的 ``^doujinstyle.*`` —— 那会把"DoujinStyle 提供的格式: FLAC\n正文"
+#: 只匹配**整行就是一句来源说明**的情况, 例如 ``某站点 提供的格式: FLAC``;
+#: 不能写成宽泛的 ``^某站点.*`` —— 那会把"某站点 提供的格式: FLAC\n正文"
 #: 整段连正文一起判掉。
 _SOURCE_NOTE_PATTERNS = (
     r"^\s*doujin\s*style\s*提供的格式\s*[:：]\s*\S+\s*$",
-    r"^\s*来源\s*[:：]\s*(vgmdb|bangumi|bgm|doujin\s*style)\s*$",
-    r"^\s*(vgmdb|bangumi|bgm\.tv)\s*提供的格式\s*[:：]\s*\S+\s*$",
-    r"^\s*下载自\s*(vgmdb|bangumi|bgm|doujin\s*style)\s*$",
+    r"^\s*来源\s*[:：]\s*(某站点|某站点|bgm|doujin\s*style)\s*$",
+    r"^\s*(某站点|某站点|bgm\.tv)\s*提供的格式\s*[:：]\s*\S+\s*$",
+    r"^\s*下载自\s*(某站点|某站点|bgm|doujin\s*style)\s*$",
 )
 
 
@@ -3449,14 +3449,14 @@ def _scrub_album_sources(album: Any) -> None:
     """剔除专辑里**对外展示**的来源站痕迹(写库时自动执行).
 
     重要: 本项目里 ``Album.urls`` 的语义是 **来源标识映射**
-    (``{"doujinstyle": "https://doujinstyle.com/?p=album&id=1042"}``),
+    (``{"某站点": "https://某站点.com/?p=album&id=1042"}``),
     跨源合并与信任判定都依赖它, 所以**绝不能在这里删** —— 展示层负责不渲染。
     同理 ``source_ids`` / ``trust_by_source`` 也保持原样。
 
     这里只清两类纯展示字段:
 
     * ``cover_url`` 指向来源站 CDN 的地址(云端会用本地缓存的封面)
-    * ``description`` 里的"DoujinStyle 提供的格式: FLAC"之类来源说明
+    * ``description`` 里的"某站点 提供的格式: FLAC"之类来源说明
     """
     hosts = tuple(h.lower() for h in SOURCE_HOSTS)
 
@@ -3472,11 +3472,11 @@ def _scrub_album_sources(album: Any) -> None:
 
 
 def scrub_source_notes(text: str) -> str:
-    """剔除自由文本里的"来源库说明"片段(如 ``DoujinStyle 提供的格式: FLAC``).
+    """剔除自由文本里的"来源库说明"片段(如 ``某站点 提供的格式: FLAC``).
 
     全文可能已经被 ``clean_whitespace`` 压成一行(换行变空格), 所以不能只看行:
     先在整段文本里按已知句式做**定点删除**, 再收拾多余空白。
-    这样 "DoujinStyle 提供的格式: FLAC 真正的简介" 也能只留下正文。
+    这样 "某站点 提供的格式: FLAC 真正的简介" 也能只留下正文。
     """
     import re as _re
 
@@ -3489,9 +3489,9 @@ def scrub_source_notes(text: str) -> str:
         _re.compile(r"doujin\s*style\s*提供的格式\s*[:：]?\s*"
                     r"(flac|wav|mp3|alac|aiff|ogg|m4a|ape|tta|dsd)?",
                     _re.I),
-        _re.compile(r"下载自\s*(vgmdb|bangumi|bgm\.tv|doujin\s*style|doujinstyle)",
+        _re.compile(r"下载自\s*(某站点|某站点|bgm\.tv|doujin\s*style|某站点)",
                     _re.I),
-        _re.compile(r"来源\s*[:：]\s*(vgmdb|bangumi|bgm\.tv|doujin\s*style|doujinstyle)",
+        _re.compile(r"来源\s*[:：]\s*(某站点|某站点|bgm\.tv|doujin\s*style|某站点)",
                     _re.I),
     )
     for pattern in inline_patterns:
