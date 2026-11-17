@@ -78,7 +78,7 @@ NEEDS_KINDS: tuple[tuple[str, str], ...] = (
 NEEDS_KEYS = tuple(key for key, _ in NEEDS_KINDS)
 
 #: **用户端不保留任何来源键表** —— 外链只按 ``urls`` 的原始顺序渲染。
-#: 带来源站名的展示顺序表放在站长端: ``dnh/webui/linkorder.py``。
+#: 带来源站名的展示顺序表放在管理面板: ``dnh/webui/linkorder.py``。
 def _url_sort_key(key: str) -> int:
     """外链排序键: **恒定返回同一个值, 即保持用户填写的顺序**.
 
@@ -94,15 +94,15 @@ def _url_sort_key(key: str) -> int:
 
 
 # --------------------------------------------------------------------------
-# 外链白名单(合规: 不得把访客导向其它数据网站)
+# 外链安全校验(**没有域名黑名单**: 任何站点的链接都允许)
 # --------------------------------------------------------------------------
 
-# 对外链接政策(名单本体在 `dnh/linkpolicy.py` —— 它是对**其它站点**的合规政策,
-# 不是用户端数据; 放在 public 包外才能让"用户端代码不出现来源名"这条不变量成立)
-from ..linkpolicy import (  # noqa: E402
-    BLOCKED_LINK_HOSTS,
-    BLOCKED_LINK_SCHEMES as _BLOCKED_LINK_SCHEMES,
+#: 一律拒绝的协议 —— 这是 XSS 防护, 不是站点政策
+_BLOCKED_LINK_SCHEMES: tuple[str, ...] = (
+    "javascript:", "jscript:", "livescript:", "vbscript:",
+    "data:", "file:", "blob:", "about:",
 )
+
 
 #: URL 里要抹掉的空白/零宽字符 —— ``java\tscript:`` / ``某站\u200b.net`` 这类绕过手法
 _URL_NOISE_RE = re.compile(r"[\s\u200b-\u200f\u2028\u2029\ufeff]+")
@@ -139,24 +139,20 @@ def _url_scheme_host(url: Any) -> tuple[str, str]:
 
 
 def blocked_link_host(url: Any) -> str:
-    """命中黑名单时返回归一化后的 host(便于日志与单测), 否则空串."""
-    _, host = _url_scheme_host(url)
-    if not host:
-        return ""
-    for blocked in BLOCKED_LINK_HOSTS:
-        if host == blocked or host.endswith("." + blocked):
-            return host
+    """**不再有域名黑名单** —— 保留函数只为兼容旧调用方, 恒返回空串."""
     return ""
 
 
 def outbound_link_reject_reason(url: Any) -> str:
-    """``""`` = 允许对外跳转; 非空 = 拒绝原因(可直接进日志)。
+    """``""`` = 允许对外跳转; 非空 = 拒绝原因.
 
-    规则(用户明确要求):
-    * 只放行 ``http`` / ``https``; ``javascript:`` / ``data:`` / 相对路径一律拒;
-    * host 命中 :data:`BLOCKED_LINK_HOSTS`(含子域、``www.``、大小写、尾点、
-      percent 编码、全角字母)一律拒;
-    * 畸形/解析不出 host 的一律拒 —— 宁可少一个链接, 不可漏一个跳转。
+    **只做安全校验, 不做站点政策**:
+    * 只放行 ``http`` / ``https``; ``javascript:`` / ``data:`` / 相对路径一律拒
+      (那是 XSS, 不是政策);
+    * 含反斜杠的拒(浏览器把反斜杠当斜杠, 能骗过 host 解析);
+    * 解析不出 host 的拒。
+
+    **不再有域名黑名单**: 任何数据站点的链接都允许显示与外跳。
     """
     text = _clean_url_text(url)
     if not text:
@@ -166,17 +162,12 @@ def outbound_link_reject_reason(url: Any) -> str:
         if lowered.startswith(scheme):
             return f"禁止的协议 {scheme}"
     if "\\" in text:
-        # 浏览器把 ``\`` 当 ``/``, ``http://x\@某站/`` 这种写法能骗过 host
-        # 解析(hostname 会变成目标站, 但 urlopen 的 netloc 是 x) —— 直接拒。
         return "URL 含有反斜杠(可能是 host 伪装)"
     scheme, host = _url_scheme_host(text)
     if scheme not in ("http", "https"):
         return f"只允许 http/https 链接(实际: {scheme or '无协议'})"
     if not host:
         return "无法解析出主机名"
-    blocked = blocked_link_host(text)
-    if blocked:
-        return f"目标站 {blocked} 属于禁止外链的数据网站"
     return ""
 
 
@@ -647,7 +638,7 @@ class PublicData:
 
         # 封面: **一律走本站 /cover/<key>**(本地缓存命中 -> 外接对象存储 ->
         # 服务端拉取落盘 -> 占位图)。绝不把源站图片地址写进 HTML ——
-        # 那既是 hotlink, 又会让被禁站点的域名出现在页面上(名单见 dnh/linkpolicy.py)。
+        # 那既是 hotlink, 也会把源站地址写进我们的 HTML。
         cover_local = _text(payload.get("cover_local"))
         cover_remote = safe_url(_text(payload.get("cover_url")))
         has_cover = bool(cover_local or cover_remote)
