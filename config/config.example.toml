@@ -1,101 +1,26 @@
-# 同人音乐自动检索 / 网易云收藏 — 配置文件
-# 所有项均可省略, 省略则使用内置默认值。
-# 也可用环境变量覆盖, 例如 DNH_NETEASE_COOKIE / DNH_X_BEARER_TOKEN / DNH_PROXY_URL
+# DDDB 线上站点配置样例
+# 复制为 config/config.toml 后修改（config.toml 不进版本库）
+#
+# 这些是**线上站点**的部署旋钮。站点只需要：
+#   - 会话库放哪里（不配就只放内存，重启掉线）
+#   - 对外地址是什么（写进 robots.txt / sitemap.xml）
+#   - 要不要限速
+#
+# 其余参数都可以留空使用内置默认值。
 
-[general]
-data_dir = "data"
-cache_dir = "data/cache"
-reports_dir = "reports"
-log_level = "INFO"
-locale = "zh"
-timezone = "Asia/Shanghai"
+[public]
+# 会话库路径。留空 = 只放内存（重启会掉线）
+sessions_db = "data/sessions.sqlite3"
 
-[http]
-timeout = 25.0
-retries = 3
-cache_ttl = 86400          # 页面缓存秒数, 0 = 关闭
-rate_limit = 1.0           # 同一域名最小请求间隔(秒)
-verify_tls = true
+# 站点对外地址，用于 robots.txt / sitemap.xml 里的绝对链接
+base_url = "https://example.com"
 
-[proxy]
-enabled = true
-url = "http://127.0.0.1:7897"
-mode = "hosts"             # hosts = 只代理下面 hosts 中的站点; all = 全部; off = 关闭
-hosts = [
-  "x.com", "twitter.com", "api.x.com", "api.twitter.com", "t.co",
-  "nitter.net", "nitter.poast.org", "nitter.privacydev.net", "xcancel.com", "lightbrd.com",
-  "doujinstyle.com", "vgmdb.net", "discogs.com", "api.discogs.com",
-  "vk.com", "vk.ru", "touhoudb.com", "thwiki.cc",
-  "dojin-music.info", "dizzylab.net", "bandcamp.com",
-  "melonbooks.co.jp", "toranoana.jp", "pixiv.net",
-  "youtube.com", "soundcloud.com", "pbs.twimg.com",
-]
-no_proxy_hosts = ["music.163.com", "163.com", "126.net", "netease.com", "localhost", "127.0.0.1"]
+# 部署在反向代理后面（信任 X-Forwarded-For / X-Forwarded-Proto）
+behind_proxy = true
 
-[netease]
-mode = "auto"              # auto | builtin | api
-api_base = "http://127.0.0.1:3000"   # mode=api 或本机已部署 NeteaseCloudMusicApi 时使用
-cookie = ""                # 直接填 Cookie, 或留空用 `dnh login qr` 扫码后写入 data/netease_cookie.txt
-cookie_file = "data/netease_cookie.txt"
-like_album = true          # 自动收藏专辑
-like_songs = false         # 同时红心匹配到的曲目
-playlist_prefix = "同人"
-playlist_privacy = 0       # 0 私密, 10 公开
-playlist_mode = "per_event" # per_event | per_tag | single
-add_tracks = true
-search_limit = 30
-request_delay = 1.2
-dry_run = false            # true = 只演练不真正收藏/建歌单
-
-[x]
-backends = ["official", "guest", "nitter", "manual"]
-bearer_token = ""          # X API v2 Bearer Token (可选)
-nitter_instances = [
-  "https://nitter.net", "https://nitter.poast.org",
-  "https://nitter.privacydev.net", "https://xcancel.com", "https://lightbrd.com",
-]
-manual_dir = "data/x_manual"
-max_posts_per_tag = 200
-include_replies = false
-include_retweets = false
-since_days = 120
-request_delay = 2.0
-
-[sources]
-enabled = [
-  "doujinstyle", "bangumi", "vgmdb", "dojinmusic", "vk",
-  "thwiki", "touhoudb", "discogs", "dizzylab", "x",
-]
-# 封面比例白名单(w/h)。正方形是主流流媒体标准(Apple Music / Spotify / 网易云),
-# 0.73 附近是 CD 书型(Diverse System 的 AD:TRANCE 系列实测 470x641≈0.733)。
-# 比例不合格的图不会被当成封面(横幅 / 截图 / 头像都会被剔除)。
-cover_aspect_bands = [[0.95, 1.05], [0.70, 0.78]]
-# 封面最短边(像素), 再小就是图标/缩略图
-cover_min_side = 300
-# 不作为封面来源的数据源; dojin-music 的站内 jacket 常是社团主页图。
-# 它的**特设页**封面仍然有效(那是明确挂着这张碟的页面)。
-cover_denied_sources = ["dojinmusic"]
-
-[sources.per_source.discogs]
-token = ""                 # https://www.discogs.com/settings/developers
-
-[sources.per_source.vgmdb]
-delay = 2.0
-
-[sources.per_source.doujinstyle]
-categories = ["Albums", "Games", "Other"]
-mirrors = ["https://doujinstyle.com", "https://www.doujinstyle.com"]
-
-[events]
-year = 0                   # 0 = 按当前日期自动推断
-kinds = ["m3", "comiket"]
-tag_variants = true
-extra_tags = []
-
-[match]
-min_score = 0.72           # 低于此分不认为匹配
-auto_score = 0.88          # 高于此分自动执行收藏/加歌单
-title_weight = 0.65
-artist_weight = 0.25
-track_weight = 0.10
-use_album_search = true
+# 限速（令牌桶）
+rate_limit_enabled = true
+rate_limit_rate = 30.0        # 每秒补充的令牌数
+rate_limit_burst = 60         # 普通页面突刺上限
+rate_limit_heavy_burst = 10   # 重页面（搜索/看板）突刺上限
+rate_limit_write_burst = 5    # 写操作突刺上限
