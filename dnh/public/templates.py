@@ -544,11 +544,11 @@ def layout(
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
 <title>{esc(title)} · {esc(ctx.site_name)}</title>
-<link rel="stylesheet" href="/static/public.css?v=50">
+<link rel="stylesheet" href="/static/public.css?v=51">
 <!-- ?v=2: 图标换过, 但静态资源被 CF/浏览器缓存 1 天, 加版本号强制刷新 -->
 <link rel="icon" href="/static/favicon.svg?v=2" type="image/svg+xml">
 <!-- 唯一的脚本: 同源外链, 只做渐进增强(CSP 只给 script-src 'self') -->
-<script src="/static/public.js?v=42" defer></script>
+<script src="/static/public.js?v=43" defer></script>
 </head>
 <body{_bg_attr(ctx)}>
 <a class="skip" href="#content">跳到正文</a>
@@ -1585,21 +1585,15 @@ def album_detail_page(
     from .embed import extract_embed as _extract_embed
 
     def _link_usable(_link: Mapping[str, Any]) -> bool:
-        if not safe_url(_link.get("href")):
-            return False
-        if outbound_link_allowed(_link.get("url")):
-            return True
-        return _extract_embed(_link.get("url")) is not None
+        """**所有外链都显示** —— 不再按来源站点过滤."""
+        return bool(safe_url(_link.get("href")))
 
     links = [link for link in list(album.get("urls") or [])
              if _link_usable(link)]
     if links:
-        # 外链**只显示用户自己填的链接名**(circle_site / x / youtube ...),
-        # 不写外部 URL、不写域名 —— 页面上不会出现资料来源站名。
-        # 仍走本站 /link/ 中转; 指向其它数据网站的条目页**根本不渲染**
-        # (合规要求), 所以剩下几条不影响 href 里的序号。
-        # **不能加 title="外链地址"**: 那等于把外部 URL 写进 HTML,
-        # 违反"页面不出现资料来源地址"的承诺。只显示链接名。
+        # 外链显示用户自己填的链接名(circle_site / x / youtube ...)。
+        # **所有站点的链接都显示**(没有域名黑名单)。
+        # 仍走本站 /link/ 中转; 序号用数据层的原始 position, 与 /link 一致。
         # **data-external**: 让 public.js 的 setupExternalLinks 弹"跳转站外"确认框。
         # 之前漏了这个属性, 外链点击没有任何提示(用户反馈"警告没了")。
         _album_key = str(album.get("key") or "")
@@ -3356,7 +3350,7 @@ def account_page(
                else '<p class="section-note">暂时没有通知。</p>')
             + '<p class="account-line"><a class="btn-ghost" href="/notifications">查看全部</a></p></section>'),
         "feedback": (
-            '<section class="panel account-section"><h2 class="section-title">向站长反馈</h2>'
+            '<section class="panel account-section"><h2 class="section-title">向管理员反馈</h2>'
             + (f'<ul class="plain-list">{fb_rows}</ul>' if fb_rows else "")
             + '<form class="auth-form" method="post" action="/feedback">'
             + _hidden("csrf_token", ctx.csrf_token)
@@ -4455,7 +4449,7 @@ def edit_album_page(
     # 2 首曲目会多出 3 个空行, 用户看到"大量空行")。空碟才给 1 行占位。
     _track_values = list(values.get("tracks") or [])
     track_rows = _track_values if _track_values else [{}]
-    # 曲目区: **按碟分组**(参考网易云的唱片编辑界面)。
+    # 曲目区: **按碟分组**(照实体唱片的分碟习惯)。
     # 每碟一个 block, 自带表头/操作/增删; 解析仍按 track_* 字段名对齐。
     _disc_groups: dict[int, list[dict[str, Any]]] = {}
     for _row in track_rows:
