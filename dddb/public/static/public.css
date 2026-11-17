@@ -377,7 +377,13 @@ a:hover { text-decoration: underline; }
 .credit-group dd { margin: 0; font-size: 13.5px; color: var(--text-dim); }
 
 .description p { margin: 0 0 10px; color: var(--text-dim); }
-.links { display: flex; gap: 8px; flex-wrap: wrap; }
+.links {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  /* 外链按钮**居中**: 一行内水平居中, 多行也整体居中 */
+  justify-content: center;
+}
 .link-pill {
   padding: 6px 12px; border-radius: 999px; font-size: 13px;
   background: var(--panel-2); border: 1px solid var(--border); color: var(--text-dim);
@@ -2634,13 +2640,15 @@ tr.track-item.is-open .track-toggle { transform: rotate(90deg); }
 .embed-list {
   display: flex;
   flex-direction: column;
+  align-items: center;      /* 播放器水平居中 */
   gap: 12px;
   /* 与上方链接按钮拉开距离 */
   margin-top: 14px;
 }
 .embed-list:empty { display: none; }
 .embed-player {
-  margin: 0;
+  /* 居中: 配合 max-width, 右侧不再留空 */
+  margin: 0 auto;
   width: 100%;
   border-radius: 10px;
   overflow: hidden;
