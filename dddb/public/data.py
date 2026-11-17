@@ -1060,6 +1060,14 @@ class PublicData:
                     "vol": int(ev["vol"] or 0) if "vol" in ek else 0,
                     "count": counts.get(ev_name, 0),
                 })
+            # 库里真实的 links(编辑页要回填, 索引页不用)
+            try:
+                _links_raw = json.loads(_text(row["links_json"])
+                                        if "links_json" in keys else "{}")
+            except ValueError:
+                _links_raw = {}
+            if not isinstance(_links_raw, dict):
+                _links_raw = {}
             out.append({
                 "name": name,
                 "abbr": abbr,
@@ -1071,7 +1079,19 @@ class PublicData:
                 (safe_url(_text(row["poster_url"]))
                  if "poster_url" in keys else ""),
                 "wiki": _text(row["wiki"]) if "wiki" in keys else "",
-                "links": {},
+                # **编辑页回填要用的原始字段** —— 只给站内 URL 的话,
+                # 编辑页既拿不到"是否已有图", 也拿不到 wiki/links。
+                "logo_local": _text(row["logo_local"])
+                if "logo_local" in keys else "",
+                "logo_url": _text(row["logo_url"])
+                if "logo_url" in keys else "",
+                "poster_local": _text(row["poster_local"])
+                if "poster_local" in keys else "",
+                "poster_url": _text(row["poster_url"])
+                if "poster_url" in keys else "",
+                "links": {str(k): str(v) for k, v in _links_raw.items() if v},
+                "sort_order": int(row["sort_order"] or 0)
+                if "sort_order" in keys else 0,
                 "editions": editions,
                 "count": sum(e["count"] for e in editions),
             })
