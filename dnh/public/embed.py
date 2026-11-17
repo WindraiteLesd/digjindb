@@ -25,7 +25,6 @@ import re
 from typing import Any
 from urllib.parse import parse_qs, quote, urlsplit
 
-from ..linkpolicy import is_blocked_host, host_of as _host_of
 
 #: 平台 key
 EMBED_YOUTUBE = "youtube"
@@ -42,6 +41,14 @@ EMBED_HEIGHT: dict[str, int] = {
 #: 高度上限, 防止用户塞一个 2000px 的 iframe 把页面撑爆
 MAX_HEIGHT = 480
 MIN_HEIGHT = 80
+
+def _host_of(url: str) -> str:
+    """URL 的 host(小写, 去端口); 解析不了返回空串."""
+    try:
+        return (urlsplit(str(url or "")).hostname or "").lower()
+    except ValueError:
+        return ""
+
 
 _IFRAME_RE = re.compile(r"<iframe\b[^>]*>", re.IGNORECASE)
 _SRC_RE = re.compile(
@@ -99,9 +106,6 @@ def extract_embed(value: Any) -> dict[str, Any] | None:
     tag = match.group(0)
     src = _pick(_SRC_RE.search(tag))
     if not src or not src.lower().startswith(("http://", "https://")):
-        return None
-    # 被禁站点连嵌入也不行(与 /link 同一套政策)
-    if is_blocked_host(_host_of(src)):
         return None
 
     platform = platform_of_url(src) or EMBED_OTHER
