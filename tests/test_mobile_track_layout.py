@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def _mobile_block() -> str:
-    css = (ROOT / "dnh/public/static/public.css").read_text(encoding="utf-8")
+    css = (ROOT / "dddb/public/static/public.css").read_text(encoding="utf-8")
     for m in re.finditer(r"@media \(max-width: 860px\) \{", css):
         start = m.start()
         depth = 0
@@ -35,7 +35,7 @@ class TestMobileCardLayout(unittest.TestCase):
 
     def setUp(self) -> None:
         self.block = _mobile_block()
-        self.css = (ROOT / "dnh/public/static/public.css").read_text(
+        self.css = (ROOT / "dddb/public/static/public.css").read_text(
             encoding="utf-8")
 
     def test_block_exists(self) -> None:
