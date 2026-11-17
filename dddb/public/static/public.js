@@ -2223,12 +2223,41 @@
     }
   }
 
+
+  /* ==========================================================================
+     展会系列卡片: 展开/收起会次列表
+     默认只显示前 5 条(CSS max-height 限制), 点「展开」放开高度并允许滚动。
+     ========================================================================== */
+  function setupSeriesCards() {
+    document.addEventListener("click", function (e) {
+      var btn = e.target && e.target.closest
+        ? e.target.closest("[data-series-more]") : null;
+      if (!btn) { return; }
+      e.preventDefault();
+      var card = btn.closest("[data-series-card]");
+      if (!card) { return; }
+      var list = card.querySelector("[data-series-editions]");
+      if (!list) { return; }
+      var open = list.classList.toggle("is-open");
+      btn.setAttribute("aria-expanded", open ? "true" : "false");
+      if (open) {
+        var hidden = Math.max(0, list.children.length - 5);
+        btn.textContent = "收起";
+        btn.setAttribute("data-open-count", String(hidden));
+      } else {
+        btn.textContent = "展开 " + (btn.getAttribute("data-open-count") || "")
+          + " 条";
+      }
+    });
+  }
+
   function boot() {
     setupPasswordMatch();
     setupUsernameCheck();
     setupPasswordRules();
     setupApplyDialog();
     setupTableResize();
+    setupSeriesCards();
     setupCoverUpload();
     setupTrackRows();
     setupPairRows();
