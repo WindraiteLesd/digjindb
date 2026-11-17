@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def _page(**overrides):
-    from dnh.public import templates as T
+    from dddb.public import templates as T
 
     kwargs = {
         "user": {"id": 35, "username": "hhdaf", "role": "editor"},
@@ -145,7 +145,7 @@ class TestProfileEmptyStates(unittest.TestCase):
 
 class TestProfileCss(unittest.TestCase):
     def test_styles_exist(self) -> None:
-        css = (ROOT / "dnh/public/static/public.css").read_text(
+        css = (ROOT / "dddb/public/static/public.css").read_text(
             encoding="utf-8")
         for token in (".pub-profile-head", ".pub-profile-avatar",
                       ".pub-profile-meta", ".pub-profile-head-card"):
@@ -153,7 +153,7 @@ class TestProfileCss(unittest.TestCase):
 
     def test_no_conflict_with_account_page(self) -> None:
         """账号页用 .profile-*, 资料页用 .pub-profile-*, 不能互相影响."""
-        css = (ROOT / "dnh/public/static/public.css").read_text(
+        css = (ROOT / "dddb/public/static/public.css").read_text(
             encoding="utf-8")
         # 账号页的 .profile-avatar 仍存在(96px)
         self.assertIn(".profile-avatar {", css)
