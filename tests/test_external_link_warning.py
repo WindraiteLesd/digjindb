@@ -27,7 +27,7 @@ def _album(urls=None):
 
 
 def _detail(album=None):
-    from dnh.public import templates as T
+    from dddb.public import templates as T
 
     ctx = T.SiteContext(csrf_token="t", is_editor=False, lang="zh")
     return T.album_detail_page(ctx, album=album or _album())
@@ -42,7 +42,7 @@ class TestExternalLinkWarning(unittest.TestCase):
 
     def setUp(self) -> None:
         self.html = _detail()
-        self.js = (ROOT / "dnh/public/static/public.js").read_text(
+        self.js = (ROOT / "dddb/public/static/public.js").read_text(
             encoding="utf-8")
 
     def test_link_pills_have_data_external(self) -> None:
