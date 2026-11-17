@@ -594,25 +594,33 @@ class TestTemplateFixes(unittest.TestCase):
         cover_rule = self.css_block(self.CSS, ".card-cover")
         self.assertIn("overflow: hidden", cover_rule)      # 圆角裁剪只在封面上
 
-    def test_event_index_kind_column_is_a_grid(self) -> None:
-        """修复 2: 展会索引右侧类型列纵向没对齐."""
+    def test_event_index_is_series_card_grid(self) -> None:
+        """展会索引现在是**两列系列卡片网格**(每卡 LOGO + 会次列表)."""
         page = T.events_index_page(
             T.SiteContext(),
-            events=[{"value": "M3-2026秋", "kind": "m3", "count": 12},
-                    {"value": "C108", "kind": "comiket", "count": 3}],
+            events=[],
             kinds=[{"value": "m3", "label": "M3", "count": 15}],
+            series=[{
+                "name": "M3", "abbr": "M3", "full_name": "M3",
+                "logo": "", "has_logo": False,
+                "editions": [
+                    {"value": "M3-2026秋",
+                     "display": "[M3] M3-2026秋 (M3-58)", "count": 12}],
+            }],
         )
-        self.assertIn('class="index-row index-row-event"', page)
-        self.assertEqual(page.count("index-row index-row-event"), 2)
-        self.assertIn('class="index-name"', page)
-        self.assertIn('<span class="index-kind">M3</span>', page)
-        self.assertIn('<span class="index-count">12 张</span>', page)
-        row = self.css_block(self.CSS, ".index-row")
-        self.assertIn("grid", row)
-        self.assertIn("align-items: center", row)
-        event_row = self.css_block(self.CSS, ".index-row-event")
-        self.assertIn("grid-template-columns: minmax(0, 1fr) 120px 88px", event_row)
-        self.assertIn("text-align: right", self.css_block(self.CSS, ".index-count"))
+        self.assertIn('class="series-grid"', page)
+        self.assertIn('data-series-card="1"', page)
+        self.assertIn("[M3] M3-2026秋 (M3-58)", page)
+        # 卡片网格 CSS: 两列
+        grid_css = self.css_block(self.CSS, ".series-grid")
+        self.assertIn("grid", grid_css)
+        self.assertIn("repeat(2", grid_css)
+        # 会次列表默认限高(只露 5 条)
+        list_css = self.css_block(self.CSS, ".series-editions")
+        self.assertIn("max-height", list_css)
+        self.assertIn("overflow: hidden", list_css)
+        open_css = self.css_block(self.CSS, ".series-editions.is-open")
+        self.assertIn("overflow-y: auto", open_css)
 
     def test_circles_index_keeps_two_columns(self) -> None:
         page = T.circles_index_page(
