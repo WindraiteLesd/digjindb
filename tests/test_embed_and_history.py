@@ -184,9 +184,20 @@ class TestEmbedRender(unittest.TestCase):
         self.assertNotIn("<iframe", html)
         self.assertIn('class="link-pill"', html)
 
-    def test_all_links_still_have_pills(self) -> None:
+    def test_embed_entries_have_no_pill(self) -> None:
+        """embed code 的条目**不出按钮**, 名字完全不外显。"""
         html = _detail(self._urls())
-        self.assertEqual(html.count('class="link-pill"'), 3)
+        # 3 条里 2 条是 embed -> 只剩 1 个普通按钮(特设)
+        self.assertEqual(html.count('class="link-pill"'), 1)
+        self.assertIn("特设", html)
+        # embed 条目的名字(测试数据里叫 XFD (...))绝不出现
+        self.assertNotIn("XFD", html, "embed 条目的链接名不该外显")
+
+    def test_all_embed_no_empty_links_div(self) -> None:
+        """全条都为 embed 时不留空的 .links 容器。"""
+        html = _detail(self._urls()[:2])
+        self.assertNotIn('<div class="links"></div>', html)
+        self.assertEqual(html.count("<iframe"), 2)
 
     def test_iframe_attrs(self) -> None:
         html = _detail(self._urls())
