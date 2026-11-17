@@ -4,7 +4,7 @@
 
 1. 模板与工具函数(纯函数, 不碰数据库) —— 转义、URL 白名单、分页边界、筛选 chip;
 2. 路由与参数解析(纯函数);
-3. :class:`dnh.public.data.PublicData` 对一个**真实临时 SQLite 库**的只读查询;
+3. :class:`dddb.public.data.PublicData` 对一个**真实临时 SQLite 库**的只读查询;
 4. 真起 HTTP 服务(端口 0)用 ``urlopen`` 打所有页面 —— 顺带验证写方法被拒、
    目录穿越被拒、安全响应头存在。
 
@@ -21,11 +21,11 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-from dnh.db import Store
-from dnh.htmlutil import parse_html, select_nodes
-from dnh.models import Album, Credit, Track
-from dnh.public import templates as T
-from dnh.public.data import (
+from dddb.db import Store
+from dddb.htmlutil import parse_html, select_nodes
+from dddb.models import Album, Credit, Track
+from dddb.public import templates as T
+from dddb.public.data import (
     DEFAULT_PER,
     NEEDS_KEYS,
     PublicData,
@@ -37,7 +37,7 @@ from dnh.public.data import (
     paginate,
     parse_filters,
 )
-from dnh.public.site import (
+from dddb.public.site import (
     Response,
     parse_query,
     parse_route,
@@ -124,7 +124,7 @@ class Fixture:
         self.covers.mkdir(parents=True, exist_ok=True)
         self.cover_file = self.covers / "local-cover.img"
         self.cover_file.write_bytes(TINY_PNG)
-        self.store = Store(root / "data" / "dnh.sqlite3")
+        self.store = Store(root / "data" / "dddb.sqlite3")
         self.keys = self._seed()
         self._order_updated()
         self.data = PublicData(self.store, root=root, covers_dir=self.covers)
@@ -230,7 +230,7 @@ class Fixture:
 
 
 def make_site(fixture: Fixture, **kwargs: object):
-    from dnh.public.site import PublicSite
+    from dddb.public.site import PublicSite
 
     return PublicSite(fixture.data, **kwargs)
 
@@ -948,7 +948,7 @@ class TestPublicData(DataCase):
         self.assertEqual(tags["東方Project"], 2)
         self.assertEqual(tags["Hardcore"], 2)
         # 展会名/会次属于"结构化字段 event 已存"的重复标签, 公开列表里被规则过滤掉
-        # (规则本体在 dnh/tagrules.py, 见 tests/test_public_filters.py 的逐条断言)
+        # (规则本体在 dddb/tagrules.py, 见 tests/test_public_filters.py 的逐条断言)
         self.assertNotIn("M3-2026春", tags)
         self.assertEqual(tags["PageTag"], PAGINATED)
         years = self.data.years()
@@ -1045,7 +1045,7 @@ class TestPublicData(DataCase):
         self.assertTrue(resolved.is_file())
         for evil in ("../../config/config.toml", "/etc/passwd",
                      str(self.fixture.root / "config" / "config.toml"),
-                     str(self.fixture.root / "data" / "dnh.sqlite3"), ""):
+                     str(self.fixture.root / "data" / "dddb.sqlite3"), ""):
             self.assertIsNone(self.data.resolve_cover_path(evil), f"应当拒绝: {evil!r}")
 
     def test_columns_detection_reports_missing_table(self) -> None:
@@ -1060,11 +1060,11 @@ class TestPublicData(DataCase):
 class TestReadOnlyStore(unittest.TestCase):
     def test_open_existing_db_and_read(self) -> None:
         with temp_dir("public-ro-") as root:
-            store = Store(root / "data" / "dnh.sqlite3")
+            store = Store(root / "data" / "dddb.sqlite3")
             album = make_album("Read Only", circle="RO")
             store.upsert_album(album)
             store.close()
-            ro = ReadOnlyStore(root / "data" / "dnh.sqlite3")
+            ro = ReadOnlyStore(root / "data" / "dddb.sqlite3")
             row = ro.query_one("SELECT COUNT(*) AS n FROM albums")
             assert row is not None
             self.assertEqual(row["n"], 1)
@@ -1073,10 +1073,10 @@ class TestReadOnlyStore(unittest.TestCase):
 
     def test_write_is_rejected_by_sqlite(self) -> None:
         with temp_dir("public-ro-write-") as root:
-            store = Store(root / "data" / "dnh.sqlite3")
+            store = Store(root / "data" / "dddb.sqlite3")
             store.upsert_album(make_album("Keep"))
             store.close()
-            ro = ReadOnlyStore(root / "data" / "dnh.sqlite3")
+            ro = ReadOnlyStore(root / "data" / "dddb.sqlite3")
             with self.assertRaises(sqlite3.OperationalError):
                 ro.query("INSERT INTO albums(key) VALUES ('x')")
             with self.assertRaises(sqlite3.OperationalError):
@@ -1193,7 +1193,7 @@ class TestPages(DataCase):
 
     def test_source_links_allowed(self) -> None:
         """页面**可以**出现来源站名(已解禁); 只禁止管理面板字样与内部路径."""
-        banned = ("管理面板", "/webui", "dnh.webui")
+        banned = ("管理面板", "/webui", "dddb.webui")
         paths = ["/", "/albums", "/stats", "/edit", "/about", "/circles", "/events", "/tags",
                  "/album/" + T.quote_segment(self.fixture.keys["alpha"]),
                  "/circle/" + T.quote_segment("ShibayanRecords"),
@@ -1282,7 +1282,7 @@ class TestHttpServer(DataCase):
     @classmethod
     def setUpClass(cls) -> None:
         super().setUpClass()
-        from dnh.public.site import make_server
+        from dddb.public.site import make_server
 
         cls.site = make_site(cls.fixture)
         cls.httpd = make_server(cls.site, host="127.0.0.1", port=0)
