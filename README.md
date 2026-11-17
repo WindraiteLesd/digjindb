@@ -45,7 +45,7 @@
 ### 启动
 
 ```bash
-python -m dnh public --root . --host 127.0.0.1 --port 8940
+python -m dddb public --root . --host 127.0.0.1 --port 8940
 ```
 
 参数：
