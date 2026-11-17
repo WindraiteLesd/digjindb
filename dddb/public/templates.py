@@ -544,7 +544,7 @@ def layout(
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
 <title>{esc(title)} · {esc(ctx.site_name)}</title>
-<link rel="stylesheet" href="/static/public.css?v=51">
+<link rel="stylesheet" href="/static/public.css?v=52">
 <!-- ?v=2: 图标换过, 但静态资源被 CF/浏览器缓存 1 天, 加版本号强制刷新 -->
 <link rel="icon" href="/static/favicon.svg?v=2" type="image/svg+xml">
 <!-- 唯一的脚本: 同源外链, 只做渐进增强(CSP 只给 script-src 'self') -->
@@ -4342,6 +4342,7 @@ def edit_album_page(
     errors: Mapping[str, Any] | None = None,
     notice: str = "",
     bind_options: Mapping[str, Sequence[Mapping[str, Any]]] | None = None,
+    creating: bool = False,
 ) -> str:
     """编辑者专用的专辑编辑表单(纯 HTML 表单 + 隐藏域 CSRF token, 零 JS).
 
@@ -4356,6 +4357,20 @@ def edit_album_page(
         album = album.to_dict() if hasattr(album, "to_dict") else dict(album)
     key = str(album.get("key") or "")
     key_html = esc(key)
+    # 新建模式: 与编辑页**同一套卡片界面**, 只是提交目标/按钮/面包屑不同
+    _form_action = "/new/album" if creating else "/album/{}/edit".format(
+        quote_segment(key))
+    _page_title = ("新建专辑" if creating
+                   else i18n.translate("edit.album", ctx.lang))
+    _cancel_href = "/edit" if creating else "/album/{}".format(
+        quote_segment(key))
+    _key_field = (
+        '<label class="field auth-field"><span>编号 / 短名'
+        '<span class="field-hint">留空自动生成</span></span>'
+        '<input type="text" name="album_key" value="{}"'
+        ' placeholder="留空自动生成"></label>'.format(esc(key))
+        if creating else ""
+    )
     notice_html = f'<div class="form-error" role="alert">{esc(notice)}</div>' if notice else ""
     # 校验错误统一列在这里: 有些错误(词条/外链/曲目行)没有对应的单个输入框,
     # 只靠红字会看不见 —— 列出来保证用户知道到底哪儿不对。
@@ -4579,27 +4594,46 @@ def edit_album_page(
                 _mapping[_nm] = _id
         bind_ids[str(_kind)] = _mapping
 
+    # 封面区: 编辑模式走异步上传(需要已有 key); 新建模式随主表单一起提交
+    if creating:
+        _cover_inner = (
+            '<div class="edit-cover-row">'
+            '<div class="edit-cover-thumb">'
+            '<div class="cover cover-fallback edit-cover-img"><span>新建</span>'
+            '</div></div>'
+            '<div class="cover-form">'
+            '<input type="file" name="cover" id="cover-input"'
+            ' accept="image/png,image/jpeg,image/webp" class="cover-file">'
+            '<p class="cover-picked" id="cover-picked"></p>'
+            '<p class="field-hint">PNG / JPEG / WebP，≤2MB；'
+            '保存后随专辑一起创建</p>'
+            '</div></div>'
+        )
+    else:
+        _cover_inner = (
+            f'<div class="edit-cover-row">'
+            f'<div class="edit-cover-thumb">{cover_thumb_html}</div>'
+            # 多图槽位: 第 1 格固定是**当前封面**, 后面是"加号"和其它图
+            f'<div class="cover-slots" data-cover-slots="1">'
+            f'<button type="button" class="cover-slot cover-slot-add"'
+            f' data-cover-add="1" title="添加图片">＋</button>'
+            f'</div>'
+            f'<div id="cover-form" class="cover-form"'
+            f' data-cover-action="/album/{esc(quote_segment(key))}/cover"'
+            f' data-cover-next="/album/{esc(quote_segment(key))}/edit"'
+            f' data-cover-token="{esc(ctx.csrf_token)}">'
+            f'<input type="file" name="cover" id="cover-input"'
+            f' accept="image/png,image/jpeg,image/webp" class="cover-file">'
+            f'<p class="cover-picked" id="cover-picked"></p>'
+            f'<button type="button" class="btn-ghost btn-xs cover-upload-btn"'
+            f' data-cover-upload="1">上传封面</button>'
+            f'<p class="field-hint">PNG / JPEG / WebP，≤2MB；上传后会替换当前封面</p>'
+            f'</div></div>'
+        )
     _cards: dict[str, str] = {}
     _cards["cover"] = _card(
         "cover",
-        f'<div class="edit-cover-row">'
-        f'<div class="edit-cover-thumb">{cover_thumb_html}</div>'
-        # 多图槽位: 第 1 格固定是**当前封面**, 后面是"加号"和其它图
-        f'<div class="cover-slots" data-cover-slots="1">'
-        f'<button type="button" class="cover-slot cover-slot-add"'
-        f' data-cover-add="1" title="添加图片">＋</button>'
-        f'</div>'
-        f'<div id="cover-form" class="cover-form"'
-        f' data-cover-action="/album/{esc(quote_segment(key))}/cover"'
-        f' data-cover-next="/album/{esc(quote_segment(key))}/edit"'
-        f' data-cover-token="{esc(ctx.csrf_token)}">'
-        f'<input type="file" name="cover" id="cover-input"'
-        f' accept="image/png,image/jpeg,image/webp" class="cover-file">'
-        f'<p class="cover-picked" id="cover-picked"></p>'
-        f'<button type="button" class="btn-ghost btn-xs cover-upload-btn"'
-        f' data-cover-upload="1">上传封面</button>'
-        f'<p class="field-hint">PNG / JPEG / WebP，≤2MB；上传后会替换当前封面</p>'
-        f'</div></div>'
+        _cover_inner
         + '<div class="form-grid">'
         + _text_input(values, errs, "title_original", "标题(原题)", required=True)
         + _text_input(values, errs, "title", "标题(译名/显示名)", hint="留空则用原题")
@@ -4774,11 +4808,41 @@ def edit_album_page(
                    + _cards["description"] + _cards["credits"]
                    + _cards["links"])
 
-    body = f"""<p class="section-note">正在编辑: <a href="/album/{esc(quote_segment(key))}">{esc(album.get("title") or key)}</a>
-      <span class="muted">· 键 {key_html}</span></p>
+    # 新建时没有"删除这张专辑"按钮, 也没有删除表单
+    if creating:
+        _delete_btn = ""
+        _delete_form = ""
+    else:
+        _delete_btn = (
+            '<!-- 删除按钮: 表单在**主表单之外**(HTML 不允许嵌套 form,'
+            ' 浏览器会丢弃内层表单, 导致点了没反应); 这里用 form 属性关联。'
+            ' 确认弹窗由 public.js 的 setupConfirm 处理'
+            '(不能写内联 onclick, CSP 会拦)。 -->'
+            '<button type="submit" class="btn-danger"'
+            ' form="delete-album-form">删除这张专辑</button>'
+        )
+        _delete_form = (
+            '<!-- 删除表单: 必须在主表单之外(HTML 不允许嵌套 form) -->'
+            '<form id="delete-album-form" method="post"'
+            ' action="/album/{}/delete"'
+            ' data-confirm="确定删除这张专辑？此操作不可恢复。">'
+            '<input type="hidden" name="csrf_token" value="{}">'
+            '</form>'
+        ).format(esc(quote_segment(key)), esc(ctx.csrf_token))
+
+    if creating:
+        _intro = ('<p class="section-note">新建专辑: 填好后点保存, '
+                  '会创建一张新专辑并进入它的编辑页。</p>')
+    else:
+        _intro = ('<p class="section-note">正在编辑: '
+                  '<a href="/album/{0}">{1}</a>'
+                  ' <span class="muted">· 键 {2}</span></p>').format(
+                      esc(quote_segment(key)), esc(album.get("title") or key),
+                      key_html)
+    body = f"""{_intro}
     {notice_html}{summary}
-    <form class="edit-form" method="post" action="/album/{esc(quote_segment(key))}/edit" enctype="multipart/form-data" data-entity-form="album">
-    <input type="hidden" name="csrf_token" value="{esc(ctx.csrf_token)}">
+    <form class="edit-form" method="post" action="{esc(_form_action)}" enctype="multipart/form-data" data-entity-form="album">
+    <input type="hidden" name="csrf_token" value="{esc(ctx.csrf_token)}">{_key_field}
     <div class="edit-draft-bar" data-draft-bar="1">
   <span class="draft-status">编辑内容会自动存草稿</span>
   <button type="button" class="btn-ghost btn-xs" data-draft-clear="1">清除草稿</button>
@@ -4798,24 +4862,22 @@ def edit_album_page(
     </section>
     <div class="field-actions edit-actions">
       <button type="submit">{i18n.translate("btn.save", ctx.lang)}</button>
-      <a class="btn-ghost" href="/album/{esc(quote_segment(key))}">{i18n.translate("btn.cancel", ctx.lang)}</a>
-      <!-- 删除按钮: 表单在**主表单之外**(HTML 不允许嵌套 form,
-           浏览器会丢弃内层表单, 导致点了没反应); 这里用 form 属性关联。
-           确认弹窗由 public.js 的 setupConfirm 处理(不能写内联 onclick, CSP 会拦)。 -->
-      <button type="submit" class="btn-danger" form="delete-album-form">删除这张专辑</button>
+      <a class="btn-ghost" href="{esc(_cancel_href)}">{i18n.translate("btn.cancel", ctx.lang)}</a>
+      {_delete_btn}
     </div>
     <div class="field-actions edit-actions" hidden>
     </div>
-    </form>
-    <!-- 删除表单: 必须在主表单之外(HTML 不允许嵌套 form) -->
-    <form id="delete-album-form" method="post"
-          action="/album/{esc(quote_segment(key))}/delete"
-          data-confirm="确定删除这张专辑？此操作不可恢复。">
-      <input type="hidden" name="csrf_token" value="{esc(ctx.csrf_token)}">
-    </form>"""
+    </form>{_delete_form}"""
+    if creating:
+        _crumbs = [("浏览", "/albums"), ("编辑", "/edit"), ("新建专辑", "")]
+    else:
+        _crumbs = [("浏览", "/albums"),
+                   (str(album.get("title") or key),
+                    "/album/{}".format(quote_segment(key))),
+                   ("编辑", "")]
     return layout(
-        ctx, title=i18n.translate("edit.album", ctx.lang), body=body, active="albums", wide=True,
-        breadcrumbs=[("浏览", "/albums"), (str(album.get("title") or key), f"/album/{quote_segment(key)}"), ("编辑", "")],
+        ctx, title=_page_title, body=body, active="albums", wide=True,
+        breadcrumbs=_crumbs,
     )
 
 
