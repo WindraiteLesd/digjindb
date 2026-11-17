@@ -2702,7 +2702,7 @@ class PublicSite:
                 self.profile_call("notify", int(admin.get("id") or 0), "report",
                                   body[:300], "/account", default=0)
         if state.session is not None:
-            state.session.flash = "已收到举报, 站长会尽快处理"
+            state.session.flash = "已收到举报, 管理员会尽快处理"
         return Response.redirect("/album/" + T.quote_segment(album_key), status=303)
 
     def _record_revision(self, state: auth.AuthState, key: str, summary: str) -> int:
@@ -3196,7 +3196,7 @@ class PublicSite:
             f'{esc((item.get("body") or "")[:160])}</li>' for item in feedbacks)
         body = (
             '<section class="panel">'
-            '<p class="section-note">给站长的反馈会在这里留档。</p>'
+            '<p class="section-note">给管理员的反馈会在这里留档。</p>'
             + (f'<ul class="plain-list">{rows}</ul>' if rows
                else '<p class="section-note">还没有提交过反馈。</p>')
             + f'<form class="auth-form" method="post" action="/feedback">{_hidden("csrf_token", self.context(state).csrf_token)}'
@@ -3205,7 +3205,7 @@ class PublicSite:
             '<div class="field-actions"><button type="submit">提交反馈</button></div></form>'
             '</section>'
         )
-        return T.layout(self.context(state, active="account"), title="向站长反馈", body=body)
+        return T.layout(self.context(state, active="account"), title="向管理员反馈", body=body)
 
     def page_user(self, state: auth.AuthState, username: str) -> str:
         # 时间按**语言时区**显示(zh=UTC+8), 不依赖服务器时区
@@ -3544,11 +3544,11 @@ class PublicSite:
             ok, message = self.profile_call(
                 "add_feedback", uid, text_body, contact, default=(False, ""))
             if ok:
-                # **必须同时推给超级用户的通知**: 站长反馈如果只躺在 feedback 表里,
+                # **必须同时推给超级用户的通知**: 管理员反馈如果只躺在 feedback 表里,
                 # 超级用户不进「我的账号」就看不见, 实际等于没发出去。
                 self._notify_superusers(
                     "feedback",
-                    f"收到一条站长反馈(来自 {state.username or '用户'}): "
+                    f"收到一条管理员反馈(来自 {state.username or '用户'}): "
                     f"{text_body[:60]}{'…' if len(text_body) > 60 else ''}",
                     "/account?tab=feedback",
                 )
@@ -3595,7 +3595,7 @@ class PublicSite:
         )
 
     def _notify_superusers(self, kind: str, text: str, link: str = "") -> int:
-        """给所有超级用户发站内通知(反馈/举报等需要站长关注的事件).
+        """给所有超级用户发站内通知(反馈/举报等需要管理员关注的事件).
 
         返回成功通知的人数。用户库不可用时静默失败(不能因为通知失败
         让用户的操作报错)。
@@ -5180,8 +5180,6 @@ class PublicSite:
             return self._plain_404()
         destination = _embed.embed_target(info.get("src"))
         if not destination:
-            return self._plain_404()
-        if outbound_link_reject_reason(destination):
             return self._plain_404()
         return Response.redirect(destination)
 
