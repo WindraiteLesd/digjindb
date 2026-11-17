@@ -993,18 +993,48 @@ class PublicData:
             "SELECT event, event_kind, COUNT(*) AS n FROM albums WHERE event != ''"
             " GROUP BY event, event_kind ORDER BY n DESC, event DESC"
         )
-        return [
-            {
-                "value": _text(row["event"]),
+        # 展会词条里可能有图片与相关链接 —— 按名字取一次, 挂到对应行。
+        # (events 表可能不存在: 老库/只读副本, 那就当没有词条信息。)
+        meta: dict[str, dict[str, Any]] = {}
+        try:
+            for item in self._query("SELECT * FROM events"):
+                keys = item.keys()
+                name = _text(item["name"])
+                if not name:
+                    continue
+                logo = ""
+                if "logo_local" in keys and _text(item["logo_local"]):
+                    logo = "/event-logo/" + quote(name, safe="")
+                elif "logo_url" in keys:
+                    logo = safe_url(_text(item["logo_url"]))
+                links: dict[str, str] = {}
+                if "links_json" in keys:
+                    try:
+                        raw = json.loads(_text(item["links_json"]) or "{}")
+                    except ValueError:
+                        raw = {}
+                    if isinstance(raw, Mapping):
+                        links = {str(k): str(v) for k, v in raw.items() if v}
+                meta[name] = {"logo": logo, "has_logo": bool(logo),
+                              "links": links}
+        except sqlite3.Error:
+            meta = {}
+        out: list[dict[str, Any]] = []
+        for row in rows:
+            name = _text(row["event"])
+            entry = {
+                "value": name,
                 "kind": _text(row["event_kind"]),
                 # **显示展会名而不是类型标签** —— 用 `event_kind_label` 会让
                 # M3-2026春 / M3-58 / M3-2026秋 全部显示成 "M3", 序号后缀全丢。
-                "label": _text(row["event"]),
+                "label": name,
                 "kind_label": event_kind_label(row["event_kind"]),
                 "count": int(row["n"]),
             }
-            for row in rows
-        ]
+            entry.update(meta.get(name) or {"logo": "", "has_logo": False,
+                                            "links": {}})
+            out.append(entry)
+        return out
 
     def event_kinds(self) -> list[dict[str, Any]]:
         rows = self._query(
