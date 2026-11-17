@@ -16,7 +16,7 @@ class TestNoHostBlacklist(unittest.TestCase):
     """任何站点都能显示和跳转。"""
 
     def test_source_sites_allowed(self) -> None:
-        from dnh.public.data import outbound_link_reject_reason
+        from dddb.public.data import outbound_link_reject_reason
 
         for url in (
             "https://某站点.net/album/1",
@@ -35,7 +35,7 @@ class TestNoHostBlacklist(unittest.TestCase):
                              f"{url} 应该允许显示")
 
     def test_subdomains_allowed(self) -> None:
-        from dnh.public.data import outbound_link_reject_reason
+        from dddb.public.data import outbound_link_reject_reason
 
         for url in ("https://lain.某站点/pic/cover/x.jpg",
                     "https://m.某站点.com/x",
@@ -44,7 +44,7 @@ class TestNoHostBlacklist(unittest.TestCase):
 
     def test_security_still_enforced(self) -> None:
         """安全校验还在: 这是 XSS 防护, 不是站点政策。"""
-        from dnh.public.data import outbound_link_reject_reason
+        from dddb.public.data import outbound_link_reject_reason
 
         for url in ("javascript:alert(1)", "data:text/html,x",
                     "vbscript:x", "file:///etc/passwd", "not-a-url",
@@ -53,7 +53,7 @@ class TestNoHostBlacklist(unittest.TestCase):
                                 f"{url} 应该被拒")
 
     def test_blocked_link_host_always_empty(self) -> None:
-        from dnh.public.data import blocked_link_host
+        from dddb.public.data import blocked_link_host
 
         for url in ("https://某站点.net/album/1", "https://example.com/"):
             self.assertEqual(blocked_link_host(url), "")
@@ -64,19 +64,19 @@ class TestNoPolicyCode(unittest.TestCase):
 
     def test_no_linkpolicy_module(self) -> None:
         """上游不带 linkpolicy; 主仓里它也不再被公开端导入。"""
-        data_py = (ROOT / "dnh/public/data.py").read_text(encoding="utf-8")
+        data_py = (ROOT / "dddb/public/data.py").read_text(encoding="utf-8")
         self.assertNotIn("from ..linkpolicy import", data_py,
                          "data.py 不该再导入黑名单")
         self.assertNotIn("BLOCKED_LINK_HOSTS", data_py)
 
     def test_embed_does_not_block_hosts(self) -> None:
-        embed = (ROOT / "dnh/public/embed.py").read_text(encoding="utf-8")
+        embed = (ROOT / "dddb/public/embed.py").read_text(encoding="utf-8")
         self.assertNotIn("is_blocked_host", embed,
                          "embed 不该再有站点黑名单判定")
 
     def test_db_import_is_tolerant(self) -> None:
         """db.py 对 netease 的导入必须容错(上游没有 netease)。"""
-        db = (ROOT / "dnh/db.py").read_text(encoding="utf-8")
+        db = (ROOT / "dddb/db.py").read_text(encoding="utf-8")
         self.assertIn("except ImportError", db)
         self.assertIn('MANUAL_METHOD = "manual"', db)
 
@@ -85,7 +85,7 @@ class TestLinksRendered(unittest.TestCase):
     """详情页把所有外链都渲染出来。"""
 
     def test_all_links_shown(self) -> None:
-        from dnh.public import templates as T
+        from dddb.public import templates as T
 
         ctx = T.SiteContext(csrf_token="t", lang="zh")
         html = T.album_detail_page(ctx, album={
