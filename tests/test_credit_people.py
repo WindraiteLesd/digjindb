@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def _render(**overrides):
-    from dnh.public import templates as T
+    from dddb.public import templates as T
 
     album = {
         "key": "d", "title": "T", "title_original": "T", "title_alt": "",
@@ -35,11 +35,11 @@ def _render(**overrides):
 
 
 def _js() -> str:
-    return (ROOT / "dnh/public/static/public.js").read_text(encoding="utf-8")
+    return (ROOT / "dddb/public/static/public.js").read_text(encoding="utf-8")
 
 
 def _css() -> str:
-    return (ROOT / "dnh/public/static/public.css").read_text(encoding="utf-8")
+    return (ROOT / "dddb/public/static/public.css").read_text(encoding="utf-8")
 
 
 class TestPeopleUnifiedList(unittest.TestCase):
@@ -196,7 +196,7 @@ class TestSaveRoundTrip(unittest.TestCase):
 
     def test_parse_credits(self) -> None:
         """一个职责对应多人时, 后端会拆成**多条 Credit**(既有设计)."""
-        from dnh.public.site import parse_album_form
+        from dddb.public.site import parse_album_form
 
         patch, errors = parse_album_form({
             "title": ["T"], "title_original": ["T"],
