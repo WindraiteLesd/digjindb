@@ -12,7 +12,7 @@ class TestUserListOrder(unittest.TestCase):
     """`list_users()` 必须按 id 升序(与页面上的 #编号 对得上)。"""
 
     def _store(self, root: Path):
-        from dnh.public.users import UserStore
+        from dddb.public.users import UserStore
 
         return UserStore(str(root / "u.sqlite3"), iterations=500)
 
@@ -74,7 +74,7 @@ class TestUserListOrder(unittest.TestCase):
     def test_sql_uses_order_by_id(self) -> None:
         """源码层面守卫: list_users 的 SQL 必须 ORDER BY id。"""
         root = Path(__file__).resolve().parents[1]
-        text = (root / "dnh/public/users.py").read_text(encoding="utf-8")
+        text = (root / "dddb/public/users.py").read_text(encoding="utf-8")
         start = text.find("def list_users(")
         self.assertGreater(start, 0)
         end = text.find("\n    def ", start + 10)
@@ -91,7 +91,7 @@ class TestAdminPageRendersInIdOrder(unittest.TestCase):
     def test_page_order(self) -> None:
         import re
 
-        from dnh.public import templates as T
+        from dddb.public import templates as T
 
         ctx = T.SiteContext(
             csrf_token="t", is_superuser=True, can_review=True,
