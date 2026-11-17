@@ -19,7 +19,7 @@ from typing import Any
 
 #: 系列名 -> (缩写, 全称)
 KNOWN_SERIES: dict[str, tuple[str, str]] = {
-    "M3": ("M3", "M3"),
+    "M3": ("M3", "Music Media-Mix Market"),
     "CM": ("CM", "Comic Market"),
     "C": ("CM", "Comic Market"),
     "例大祭": ("例大祭", "博丽神社例大祭"),
@@ -107,10 +107,9 @@ def parse_event_name(name: Any) -> dict[str, Any]:
         vol = M3_VOL_BY_YEAR_SEASON.get((year, season), 0)
         vol_label = (f"{abbr}-{vol}" if vol else
                      (f"{abbr}-{year}{season}" if season else f"{abbr}-{year}"))
-        # 全称: 用户示例是 "[M3] M3-2026秋 (M3-58)" —— 也就是**这一届的名字**。
-        # 系列名(full)本身是 "M3", 但展示要用 "M3-2026秋", 所以把届名单独带上。
-        edition = f"{abbr}-{year}{season}" if season else f"{abbr}-{year}"
-        return {"series": full, "abbr": abbr, "full_name": edition,
+        # series 是**系列 key**(稳定, 用作外键); full_name 是**系列全称**;
+        # 会次的展示名由 data 层用会次自己的名字拼, 不在这里。
+        return {"series": full, "abbr": abbr, "full_name": full,
                 "vol": vol, "vol_label": vol_label}
 
     # ③ 例大祭21 / 秋例13 / 博丽神社例大祭 21
