@@ -18,7 +18,7 @@ BASE = {
 
 
 def _edit_pairs(album):
-    from dnh.public import templates as T
+    from dddb.public import templates as T
 
     ctx = T.SiteContext(csrf_token="t", is_editor=True, lang="zh",
                         user={"id": 1, "username": "ed", "role": "editor"})
@@ -33,7 +33,7 @@ def _edit_pairs(album):
 
 
 def _detail_pairs(album):
-    from dnh.public import templates as T
+    from dddb.public import templates as T
 
     ctx = T.SiteContext(csrf_token="t", is_editor=False, lang="zh")
     view = dict(album)
@@ -116,7 +116,7 @@ class TestNoDuplicateArtists(unittest.TestCase):
     def test_only_buttons_no_artist_lines(self) -> None:
         """详情页制作人员只有按钮形式(没有单独的「艺人」文字行)。"""
         album = dict(BASE, artists=["甲"], credits=[])
-        from dnh.public import templates as T
+        from dddb.public import templates as T
 
         ctx = T.SiteContext(csrf_token="t", is_editor=False, lang="zh")
         html = T.album_detail_page(ctx, album=album)
@@ -141,7 +141,7 @@ class TestRoleLabel(unittest.TestCase):
 
     def test_chip_html_order(self) -> None:
         album = dict(BASE, artists=[], credits=[{"role": "母带", "name": "某人"}])
-        from dnh.public import templates as T
+        from dddb.public import templates as T
 
         ctx = T.SiteContext(csrf_token="t", is_editor=False, lang="zh")
         view = dict(album, credits=[{"label": "母带", "names": ["某人"]}])
