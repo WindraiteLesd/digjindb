@@ -1192,10 +1192,16 @@ class PublicData:
             except ValueError:
                 continue
             key = str(row["key"])
-            title = str(row["title"] or data.get("title") or key)
-            albums.append({"key": key, "title": title, "href": _album_href(key),
-                           "date": str(data.get("date") or ""),
-                           "event": str(data.get("event") or "")})
+            # **用 make_view 生成完整视图**: 卡片需要 has_cover / cover /
+            # track_count 等字段, 手工拼的那几个键会让封面变占位块、
+            # 曲目数恒为 0(有曲目也显示"无曲目")。
+            view = self.make_view(
+                data, updated_at=row["updated_at"]
+                if "updated_at" in row.keys() else None,
+            )
+            view["date"] = str(data.get("date") or view.get("date") or "")
+            view["event"] = str(data.get("event") or view.get("event") or "")
+            albums.append(view)
             if data.get("event"):
                 events.append(str(data["event"]))
             if data.get("date"):
