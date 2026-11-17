@@ -3,8 +3,8 @@
 分五层:
 
 1. 纯函数(口令哈希与校验、用户名/口令校验、角色规整);
-2. :class:`dnh.public.users.UserStore` 对**独立的**用户 sqlite 文件;
-3. :mod:`dnh.public.auth` 的会话表 / Cookie / CSRF 签名 / 同源判定;
+2. :class:`dddb.public.users.UserStore` 对**独立的**用户 sqlite 文件;
+3. :mod:`dddb.public.auth` 的会话表 / Cookie / CSRF 签名 / 同源判定;
 4. 真起一个 HTTP 服务(端口 0)走完整链路: 注册 -> 登录 -> 编辑者改专辑 ->
    用 ``Store.get_album`` 复核字段真的变了 -> 还原; 以及未登录/普通用户写 -> 403;
 5. 三处前端展示修复的结构断言(卡片标签换行 / 展会索引类型列网格 / 曲目表"共 N 首"方向)。
@@ -20,18 +20,18 @@ import sqlite3
 import threading
 import unittest
 
-from dnh.public import verify
+from dddb.public import verify
 import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
 
-from dnh.db import Store
-from dnh.models import Album, Credit, Track
-from dnh.public import auth
-from dnh.public import templates as T
-from dnh.public.data import PublicData, ReadOnlyStore
-from dnh.public.site import (
+from dddb.db import Store
+from dddb.models import Album, Credit, Track
+from dddb.public import auth
+from dddb.public import templates as T
+from dddb.public.data import PublicData, ReadOnlyStore
+from dddb.public.site import (
     PublicSite,
     form_display_values,
     form_values,
@@ -40,7 +40,7 @@ from dnh.public.site import (
     parse_duration,
     parse_route,
 )
-from dnh.public.users import (
+from dddb.public.users import (
     ROLE_EDITOR,
     ROLE_VIEWER,
     UserStore,
@@ -92,7 +92,7 @@ class Fixture:
         self.root = root
         self.covers = root / "data" / "covers"
         self.covers.mkdir(parents=True, exist_ok=True)
-        self.db_path = root / "data" / "dnh.sqlite3"
+        self.db_path = root / "data" / "dddb.sqlite3"
         self.users_path = root / "data" / "public_users.sqlite3"
         self.store = Store(self.db_path)
         self.album = make_album(
@@ -193,7 +193,7 @@ class TestPasswordHashing(unittest.TestCase):
 class TestCredentialValidation(unittest.TestCase):
     def test_password_problem(self) -> None:
         """**新策略**: 至少 8 位 + 含数字 + 含英文字母(用户要求)。"""
-        from dnh.public.users import password_problem
+        from dddb.public.users import password_problem
         self.assertEqual(password_problem("abc12345"), "")
         self.assertEqual(password_problem("PASSWORD9"), "")
         self.assertIn("位", password_problem("abc1234"))          # 太短
@@ -225,7 +225,7 @@ class TestCredentialValidation(unittest.TestCase):
     def test_default_users_path_is_separate_from_album_db(self) -> None:
         path = default_users_path(Path("E:/tmp/project"))
         self.assertEqual(path.name, "public_users.sqlite3")
-        self.assertNotIn("dnh.sqlite3", path.name)
+        self.assertNotIn("dddb.sqlite3", path.name)
 
 
 # --------------------------------------------------------------------------
@@ -321,7 +321,7 @@ class TestUserStore(unittest.TestCase):
 
     def test_users_live_in_a_separate_database_file(self) -> None:
         """核心约束: 用户表**不在**专辑主库 schema 里."""
-        album_db = self.root / "dnh.sqlite3"
+        album_db = self.root / "dddb.sqlite3"
         album_store = Store(album_db)
         album_store.upsert_album(make_album("分离测试"))
         albums_path = Path(album_store.path)
@@ -564,7 +564,7 @@ class TestAlbumFormParsing(unittest.TestCase):
 
 
 class TestTemplateFixes(unittest.TestCase):
-    CSS = (Path(__file__).resolve().parent.parent / "dnh" / "public" / "static" / "public.css").read_text(
+    CSS = (Path(__file__).resolve().parent.parent / "dddb" / "public" / "static" / "public.css").read_text(
         encoding="utf-8")
 
     @staticmethod
@@ -871,7 +871,7 @@ class HttpCase(unittest.TestCase):
     def register_fields(self, **overrides: object) -> dict:
         """注册表单字段: CSRF token + 页面上的验证码(算术题当场算答案).
 
-        注册现在**必须**带验证码(见 :mod:`dnh.public.verify`), 所以凡是走
+        注册现在**必须**带验证码(见 :mod:`dddb.public.verify`), 所以凡是走
         ``POST /register`` 的测试都用这个 helper 生成字段, 别再手写 csrf。
         """
         html = self.page("/register")
