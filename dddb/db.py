@@ -488,6 +488,10 @@ CREATE TABLE IF NOT EXISTS events (
     start_date TEXT NOT NULL DEFAULT '',
     end_date   TEXT NOT NULL DEFAULT '',
     tags       TEXT NOT NULL DEFAULT '[]',
+    -- 展会词条也允许图片与相关链接(与 circles 的 logo_url/urls_json 同构)
+    logo_url   TEXT NOT NULL DEFAULT '',
+    logo_local TEXT NOT NULL DEFAULT '',
+    links_json TEXT NOT NULL DEFAULT '{}',
     updated_at REAL NOT NULL
 );
 
@@ -637,7 +641,36 @@ class Store:
         with self._lock:
             self._conn.executescript(_SCHEMA)
             self._conn.commit()
+            self._migrate_events_media()
             self._migrate_rejections()
+
+    def _migrate_events_media(self) -> None:
+        """给老库的 ``events`` 表补上 logo/links 列.
+
+        ``CREATE TABLE IF NOT EXISTS`` 对**已存在**的表不会加列, 所以老库
+        直接升级后写 ``logo_url`` 会报 "no such column"。这里按 PRAGMA 检查后
+        逐列 ALTER; 已存在的列跳过(幂等)。
+        """
+        try:
+            tables = {str(r["name"]) for r in self.query(
+                "SELECT name FROM sqlite_master WHERE type = 'table'")}
+        except Exception:                     # noqa: BLE001
+            return
+        if "events" not in tables:
+            return
+        try:
+            have = {str(r["name"]) for r in self.query("PRAGMA table_info(events)")}
+        except Exception:                     # noqa: BLE001
+            return
+        for name, decl in (("logo_url", "TEXT NOT NULL DEFAULT ''"),
+                           ("logo_local", "TEXT NOT NULL DEFAULT ''"),
+                           ("links_json", "TEXT NOT NULL DEFAULT '{}'")):
+            if name in have:
+                continue
+            try:
+                self.execute(f"ALTER TABLE events ADD COLUMN {name} {decl}")
+            except Exception:                 # noqa: BLE001
+                pass
 
     def _migrate_rejections(self) -> None:
         """把第一版的「整张碟拒绝」表(``netease_rejections``)迁移成**对级拉黑**.
@@ -2031,11 +2064,23 @@ class Store:
     # -- 事件 ---------------------------------------------------------------
 
     def save_event(self, name: str, *, kind: str = "", year: int = 0, season: str = "",
-                   start_date: str = "", end_date: str = "", tags: Sequence[str] = ()) -> None:
+                   start_date: str = "", end_date: str = "", tags: Sequence[str] = (),
+                   logo_url: str = "", logo_local: str = "",
+                   links: Mapping[str, str] | None = None) -> None:
+        """写入/更新一条展会.
+
+        ``logo_url`` / ``logo_local`` / ``links`` 是**词条级**补充信息
+        (展会图与官网/售票页等链接), 与 circles 的处理方式一致。
+        """
         self.execute(
-            "REPLACE INTO events(name, kind, year, season, start_date, end_date, tags, updated_at)"
-            " VALUES (?,?,?,?,?,?,?,?)",
-            (name, kind, int(year), season, start_date, end_date, json.dumps(list(tags), ensure_ascii=False), time.time()),
+            "REPLACE INTO events(name, kind, year, season, start_date, end_date,"
+            " tags, logo_url, logo_local, links_json, updated_at)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            (name, kind, int(year), season, start_date, end_date,
+             json.dumps(list(tags), ensure_ascii=False),
+             str(logo_url or ""), str(logo_local or ""),
+             json.dumps(dict(links or {}), ensure_ascii=False),
+             time.time()),
         )
 
     def list_events(self) -> list[dict[str, Any]]:
@@ -2044,6 +2089,14 @@ class Store:
         for r in rows:
             d = dict(r)
             d["tags"] = json.loads(d.get("tags") or "[]")
+            try:
+                d["links"] = json.loads(d.get("links_json") or "{}")
+            except ValueError:
+                d["links"] = {}
+            if not isinstance(d["links"], dict):
+                d["links"] = {}
+            # 有图(本地或远程)才算 has_logo, 模板用它决定要不要渲染 <img>
+            d["has_logo"] = bool(d.get("logo_local") or d.get("logo_url"))
             out.append(d)
         return out
 
