@@ -55,11 +55,12 @@ from dnh.public.users import (
 )
 from tests._tmp import temp_dir
 
-#: 页面 HTML 里绝对不允许出现的东西(站长端 / 数据源)
+#: 页面 HTML 里绝对不允许出现的东西(管理面板 / 数据源)
+#: 页面不该出现的字样: **只有管理面板相关**。
+#: 来源站名已解禁(用户要求显示数据来源), 不再在此列。
 FORBIDDEN_WORDS = (
-    "站长端", "admin-url", "DEFAULT_ADMIN_URL", "8787", "admin-link",
-    "dojinmusic", "dojin-music", "bangumi", "bgm.tv", "vgmdb", "doujinstyle",
-    "dizzylab", "discogs", "touhoudb", "thwiki", "来源构成", "来源",
+    "管理面板", "admin-url", "DEFAULT_ADMIN_URL", "8787", "admin-link",
+    "webui", "/admin", "管理面板",
 )
 
 
@@ -108,9 +109,9 @@ class Fixture:
                     Track(title="幻想郷の記憶", index=2, duration=245)],
             credits=[Credit(name="ShibayanRecords", role="circle"),
                      Credit(name="坂上なち", role="vocal")],
-            urls={"vgmdb": "https://vgmdb.net/album/101",
+            urls={"某站点": "https://某站点.net/album/101",
                   "special": "https://crimson.example.com/"},
-            source_ids={"vgmdb": "101"},
+            source_ids={"某站点": "101"},
         )
         self.store.upsert_album(self.album)
         self.reference = make_album(
@@ -126,7 +127,7 @@ class Fixture:
             "Crimson Lotus",
             circle="蝶々結び",
             event="C108",
-            source_ids={"bangumi": "303"},
+            source_ids={"某站点": "303"},
         )
         self.store.upsert_album(self.second)
         self.data = PublicData(
@@ -558,7 +559,7 @@ class TestAlbumFormParsing(unittest.TestCase):
 
 
 # --------------------------------------------------------------------------
-# 5. 模板: 三处展示修复 + 无站长端/来源字样
+# 5. 模板: 三处展示修复 + 无管理面板/来源字样
 # --------------------------------------------------------------------------
 
 
@@ -662,8 +663,8 @@ class TestTemplateFixes(unittest.TestCase):
         page = T.about_page(T.SiteContext(), stats={"albums": 5, "tracks": 9, "circles": 2,
                                                    "events": 1, "tags": 3, "has_profile": 4,
                                                    "edited": 1})
-        for word in ("dojin-music", "dojinmusic", "bgm.tv", "Bangumi", "VGMdb", "DoujinStyle",
-                     "来源", "覆盖率", "抓取", "采集", "站长端", "歌单", "后台任务"):
+        for word in ("某站点", "dojinmusic", "某站点", "Bangumi", "VGMdb", "某站点",
+                     "来源", "覆盖率", "抓取", "采集", "管理面板", "歌单", "后台任务"):
             self.assertNotIn(word, page, word)
         self.assertIn("账号与权限", page)
         self.assertIn("编辑者", page)
@@ -681,27 +682,28 @@ class TestTemplateFixes(unittest.TestCase):
                                              "window": [], "has_prev": False, "has_next": False},
                             url_for=T.make_url_for("/edit", {}))
         self.assertIn("工作队列", page)
-        for word in ("站长端", "公开端", "只读", "补数据", "来源"):
+        for word in ("管理面板", "公开端", "只读", "补数据", "来源"):
             self.assertNotIn(word, page, word)
 
-    def test_detail_page_drops_data_site_links(self) -> None:
-        """**政策**: 指向其它数据网站条目页的链接不得出现在公开端.
-
-        用户明确要求"禁止使用其它数据网站的外链, 仅限本地数据库缓存或外接对象储存"。
-        页面既不能给 href, 也不能留下站名字样。
-        """
+    def test_detail_page_shows_all_links(self) -> None:
+        """**所有外链都显示**(来源站已解禁, 不再有域名黑名单)。"""
         page = T.album_detail_page(T.SiteContext(), album={
             "key": "k", "href": "/album/k", "title": "T", "tags": [], "genres": [], "credits": [],
             "missing": [], "has_cover": False, "cover": "", "track_count": 0, "tracks": [],
             "date": "", "event": "", "circle": "", "artists": [], "description": "",
             "catalog_no": "", "price": "", "booth": "", "hall": "", "updated_text": "",
             "title_alt": "", "romaji": "", "event_kind": "", "year": "",
-            "urls": [{"url": "https://vgmdb.net/album/1", "href": "/link/k/1"},
-                     {"url": "https://bgm.tv/subject/1", "href": "/link/k/2"}],
+            "urls": [{"name": "某站点", "url": "https://某站点.net/album/1",
+                      "href": "/link/k/1", "position": 1, "embed": "",
+                      "embed_height": 0, "embed_src": ""},
+                     {"name": "某站点", "url": "https://某站点/subject/1",
+                      "href": "/link/k/2", "position": 2, "embed": "",
+                      "embed_height": 0, "embed_src": ""}],
         })
-        self.assertNotIn("/link/k/1", page, "数据站链接不该出现在页面上")
-        for word in ("vgmdb", "bgm.tv", "bangumi"):
-            self.assertNotIn(word, page.lower())
+        self.assertIn("/link/k/1", page, "外链该出现在页面上")
+        self.assertIn("/link/k/2", page)
+        self.assertIn("某站点", page.lower())
+        self.assertIn("某站点", page.lower())
 
     def test_detail_page_shows_external_links_via_own_route(self) -> None:
         page = T.album_detail_page(T.SiteContext(), album={
@@ -899,7 +901,8 @@ class TestHttpAnonymous(HttpCase):
             self.get("/edit")
         self.assertEqual(ctx.exception.code, 403)
 
-    def test_pages_never_mention_admin_or_sources(self) -> None:
+    def test_pages_never_mention_admin(self) -> None:
+        """页面不出现管理面板字样(来源站名已解禁, 不在此列)。"""
         paths = ["/", "/albums", "/about", "/stats", "/login", "/register",
                  "/circles", "/events", "/tags",
                  "/album/" + T.quote_segment(self.fixture.album.key),
