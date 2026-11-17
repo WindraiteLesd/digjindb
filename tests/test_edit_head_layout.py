@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def _render():
-    from dnh.public import templates as T
+    from dddb.public import templates as T
 
     album = {
         "key": "d", "title": "T", "title_original": "T", "title_alt": "",
@@ -31,7 +31,7 @@ class TestEditHeadGrid(unittest.TestCase):
 
     def setUp(self) -> None:
         self.html = _render()
-        self.css = (ROOT / "dnh/public/static/public.css").read_text(
+        self.css = (ROOT / "dddb/public/static/public.css").read_text(
             encoding="utf-8")
 
     def test_cover_and_title_same_card(self) -> None:
@@ -96,7 +96,7 @@ class TestNoLeftoverGridOnRows(unittest.TestCase):
     """曲目表的 .track-row 不能再有 grid 布局(会跟 table 冲突)."""
 
     def test_track_row_no_grid(self) -> None:
-        css = (ROOT / "dnh/public/static/public.css").read_text(
+        css = (ROOT / "dddb/public/static/public.css").read_text(
             encoding="utf-8")
         for m in re.finditer(r"\.track-row[^{,]*\{([^}]*)\}", css):
             body = m.group(1)
