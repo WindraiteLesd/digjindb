@@ -1910,6 +1910,14 @@ class PublicSite:
             if not self.can_edit(state):
                 return self._html(self.forbidden(state, "只有编辑者可以新建条目。"),
                                   status=403, cookies=cookies)
+            if kind == "album":
+                # **与编辑页完全一致的卡片界面**(不是那张 19 个文本框的旧表单)
+                return self._html(T.edit_album_page(
+                    self.context(state, active="edit"),
+                    album={},
+                    values=T.edit_values_from_album({}),
+                    bind_options=self.bind_options(),
+                    creating=True), cookies=cookies)
             return self._html(T.new_entity_page(
                 self.context(state, active="edit"), kind,
                 bind_options=self.bind_options()), cookies=cookies)
@@ -2862,6 +2870,67 @@ class PublicSite:
                               status=500, cookies=cookies)
         return self._html(self.account_page(state, notice="布局偏好已保存。"),
                           cookies=cookies)
+
+    def _save_album_cover_file(self, key: str,
+                               values: Mapping[str, Any]) -> bool:
+        """新建专辑时保存随表单上传的封面(``name="cover"``).
+
+        ``values`` 里已经由 ``_values_from_multipart`` 拆出了文件字节 ——
+        形如 ``{"cover": {"filename": ..., "content_type": ..., "data": b"..."}}``。
+        失败返回 False(只记日志): 封面存不下来不该让整张专辑创建失败。
+        """
+        if not key:
+            return False
+        covers_dir = getattr(self.data, "covers_dir", None)
+        if not covers_dir:
+            return False
+        raw = values.get("cover")
+        if not isinstance(raw, Mapping):
+            return False
+        blob = raw.get("data") or b""
+        if not blob:
+            return False
+        mime = str(raw.get("content_type") or "").split(";")[0].strip().lower()
+        ext = {"image/png": ".png", "image/jpeg": ".jpg",
+               "image/webp": ".webp"}.get(mime)
+        if ext is None:
+            logger.warning("新建专辑 %s: 封面格式不支持(%s), 已跳过", key, mime)
+            return False
+        if len(blob) > 2 * 1024 * 1024:
+            logger.warning("新建专辑 %s: 封面超过 2MB, 已跳过", key)
+            return False
+        stem = re.sub(r"[^A-Za-z0-9._-]+", "-", str(key))[:120] or "cover"
+        target = Path(covers_dir) / f"{stem}.img"
+        try:
+            Path(covers_dir).mkdir(parents=True, exist_ok=True)
+            (Path(covers_dir) / "upload").mkdir(parents=True, exist_ok=True)
+            target.write_bytes(blob)
+            (Path(covers_dir) / "upload" / f"{stem}{ext}").write_bytes(blob)
+        except OSError as exc:                     # pragma: no cover
+            logger.warning("新建专辑 %s: 封面落盘失败: %s", key, exc)
+            return False
+        if self.db_path is None:
+            return True
+        from dddb.db import Store as _Store
+
+        import time as _time
+
+        store = _Store(self.db_path)
+        try:
+            ok, message = store.update_album_fields(key, {
+                "cover_local": str(target),
+                "cover_v": str(int(_time.time())),
+            })
+        finally:
+            store.close()
+        if not ok:
+            logger.warning("新建专辑 %s: 写 cover_local 失败: %s", key, message)
+            return False
+        try:
+            self.data.invalidate()
+        except Exception:                # noqa: BLE001
+            pass
+        return True
 
     def _do_album_cover(self, key: str, state: auth.AuthState, body: bytes,
                         headers: Mapping[str, Any], cookies: list[str],
@@ -4436,27 +4505,52 @@ class PublicSite:
         created_name = ""
         try:
             if kind == "album":
-                title = field("title")
+                # **与编辑页同一个解析器**: 新界面提交的是卡片的
+                # track_* 多列 / credit_role+credit_name 配对 /
+                # url_key+url_value 配对 / agents 隐藏字段,
+                # 只认扁平 textarea 的旧解析会把这些字段全丢掉。
+                patch, errors = T.parse_album_form(values)
+                if errors:
+                    # 有错就回填整张卡片界面(不是那张 19 个文本框的旧表单)
+                    return self._html(
+                        T.edit_album_page(
+                            self.context(state, active="edit"),
+                            album={}, values=patch or values,
+                            errors=errors,
+                            notice="没有保存，请修正下面的问题。",
+                            bind_options=self.bind_options(),
+                            creating=True,
+                        ),
+                        status=400, cookies=cookies)
+                title = str(patch.get("title_original")
+                            or patch.get("title") or "").strip()
                 if not title:
                     return self._html(self.forbidden(state, "标题不能为空。"),
                                       status=400, cookies=cookies)
-                date = field("release_date")
-                # 编号/短名由数据库按序生成(表单里没有该字段)
-                key = self._make_album_key(title, field("circle"), date)
+                date = str(patch.get("release_date") or "")
+                # 表单里给了 album_key 就用它, 否则按标题生成
+                key = (str(text_field(values, "album_key") or "").strip()
+                       or self._make_album_key(title, str(patch.get("circle")
+                                                          or ""), date))
                 payload = {
-                    "key": key, "title": title,
-                    "title_original": field("title_original"),
-                    "circle": field("circle"),
-                    "artists": self._split_names(field("artists")),
-                    "release_date": date, "event": field("event"),
-                    "hall": field("hall"), "booth": field("booth"),
-                    "catalog_no": field("catalog_no"), "price": field("price"),
-                    "description": field("description"),
-                    "tags": self._split_names(field("tags")),
-                    "genres": self._split_names(field("genres")),
-                    "credits": self._parse_credits(field("credits")),
-                    "urls": self._parse_urls(field("urls")),
-                    "tracks": self._parse_tracks(field("tracks")),
+                    "key": key,
+                    "title": str(patch.get("title") or title),
+                    "title_original": title,
+                    "title_romaji": str(patch.get("title_romaji") or ""),
+                    "circle": str(patch.get("circle") or ""),
+                    "artists": list(patch.get("artists") or []),
+                    "release_date": date,
+                    "event": str(patch.get("event") or ""),
+                    "hall": str(patch.get("hall") or ""),
+                    "booth": str(patch.get("booth") or ""),
+                    "catalog_no": str(patch.get("catalog_no") or ""),
+                    "price": str(patch.get("price") or ""),
+                    "description": str(patch.get("description") or ""),
+                    "tags": list(patch.get("tags") or []),
+                    "genres": list(patch.get("genres") or []),
+                    "credits": list(patch.get("credits") or []),
+                    "urls": dict(patch.get("urls") or {}),
+                    "tracks": list(patch.get("track_list") or []),
                     "source_ids": {},
                 }
                 store.upsert_album(Album.from_dict(payload))
@@ -4467,8 +4561,10 @@ class PublicSite:
                                    username=str(state.session.username
                                                 if state.session else ""),
                                    summary="新建专辑")
+                # 封面: 新建表单里的 <input type="file" name="cover">
+                self._save_album_cover_file(key, values)
                 created_key = created_name = key
-                target = "/album/" + T.quote_segment(key)
+                target = "/album/" + T.quote_segment(key) + "/edit"
             elif kind == "circle":
                 name = field("name")
                 if not name:
