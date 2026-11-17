@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 from . import i18n
+from .markdown import markdown_to_html
 
 import json
 import html
@@ -544,11 +545,11 @@ def layout(
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
 <title>{esc(title)} · {esc(ctx.site_name)}</title>
-<link rel="stylesheet" href="/static/public.css?v=53">
+<link rel="stylesheet" href="/static/public.css?v=54">
 <!-- ?v=2: 图标换过, 但静态资源被 CF/浏览器缓存 1 天, 加版本号强制刷新 -->
 <link rel="icon" href="/static/favicon.svg?v=2" type="image/svg+xml">
 <!-- 唯一的脚本: 同源外链, 只做渐进增强(CSP 只给 script-src 'self') -->
-<script src="/static/public.js?v=43" defer></script>
+<script src="/static/public.js?v=44" defer></script>
 </head>
 <body{_bg_attr(ctx)}>
 <a class="skip" href="#content">跳到正文</a>
@@ -1799,6 +1800,215 @@ def circle_page(
     )
 
 
+def event_series_edit_page(
+    ctx: SiteContext,
+    *,
+    series: Mapping[str, Any],
+    errors: Mapping[str, Any] | None = None,
+    notice: str = "",
+    creating: bool = False,
+) -> str:
+    """展会系列编辑: LOGO/海报上传 + MD wiki + 相关链接."""
+    errs = errors or {}
+    name = str(series.get("name") or "")
+    notice_html = (f'<div class="form-error" role="alert">{esc(notice)}</div>'
+                   if notice else "")
+    messages = [str(v) for v in errs.values() if str(v or "").strip()]
+    summary = (
+        '<div class="form-error" role="alert">有 {} 处需要修正:<ul '
+        'class="form-error-list">{}</ul></div>'.format(
+            len(messages),
+            "".join(f"<li>{esc(m)}</li>" for m in messages))
+        if messages else "")
+
+    action = ("/event-series/new" if creating else
+              "/event-series/{}/edit".format(quote_segment(name)))
+
+    def _img_preview(kind: str, label: str, url_key: str, local_key: str) -> str:
+        local = str(series.get(local_key) or "")
+        remote = str(series.get(url_key) or "")
+        src = ("/event-series-{}/{}".format(kind, quote_segment(name))
+               if local and not creating else (safe_url(remote) or ""))
+        preview = ('<img class="series-edit-thumb" src="{}" alt="{}">'
+                   .format(esc(src), esc(label)) if src else
+                   '<span class="series-edit-thumb series-edit-thumb-text">'
+                   '无图</span>')
+        return (
+            '<div class="field auth-field series-edit-image">'
+            '<span>{label}</span>'
+            '<div class="series-edit-image-row">{preview}'
+            '<div class="series-edit-image-form">'
+            '<input type="file" name="{kind}" accept="image/png,image/jpeg,image/webp">'
+            '<input type="text" name="{url_key}" value="{remote}"'
+            ' placeholder="或填图片 URL">'
+            '<p class="field-hint">PNG / JPEG / WebP，≤2MB；上传优先于 URL</p>'
+            '</div></div></div>'
+        ).format(label=esc(label), preview=preview, kind=esc(kind),
+                 url_key=esc(url_key), remote=esc(remote))
+
+    links_text = "\n".join(
+        "{}: {}".format(k, v) for k, v in (series.get("links") or {}).items())
+
+    body = (
+        '{notice}{summary}'
+        '<p class="section-note">{intro}</p>'
+        '<form class="edit-form" method="post" action="{action}"'
+        ' enctype="multipart/form-data" data-entity-form="event_series">'
+        '<input type="hidden" name="csrf_token" value="{token}">'
+        '<section class="edit-card" data-card="series-info">'
+        '<div class="edit-card-head"><h2 class="section-title">基本信息</h2></div>'
+        '<div class="edit-card-body"><div class="form-grid">'
+        '<label class="field auth-field"><span>系列名<span class="field-hint">'
+        '唯一标识</span></span>'
+        '<input type="text" name="name" value="{name}"{name_ro} required></label>'
+        '<label class="field auth-field"><span>缩写</span>'
+        '<input type="text" name="abbr" value="{abbr}" placeholder="如 M3 / CM"></label>'
+        '<label class="field auth-field"><span>全称</span>'
+        '<input type="text" name="full_name" value="{full}"'
+        ' placeholder="如 Comic Market"></label>'
+        '</div></div></section>'
+        '<section class="edit-card" data-card="series-image">'
+        '<div class="edit-card-head"><h2 class="section-title">图片</h2></div>'
+        '<div class="edit-card-body">{logo}{poster}</div></section>'
+        '<section class="edit-card" data-card="series-wiki">'
+        '<div class="edit-card-head"><h2 class="section-title">介绍'
+        '<span class="section-sub">Markdown：支持图片与外链</span></h2></div>'
+        '<div class="edit-card-body">'
+        '<label class="field auth-field"><textarea name="wiki" rows="12"'
+        ' placeholder="# 标题\n\n正文，可以写 **粗体**、[链接](https://...)、'
+        '![图片](https://...)">'
+        '{wiki}</textarea></label></div></section>'
+        '<section class="edit-card" data-card="series-links">'
+        '<div class="edit-card-head"><h2 class="section-title">相关链接</h2></div>'
+        '<div class="edit-card-body">'
+        '<label class="field auth-field"><textarea name="links" rows="4"'
+        ' placeholder="每行: 标签: URL">'
+        '{links}</textarea></label></div></section>'
+        '<div class="field-actions edit-actions">'
+        '<button type="submit">保存</button>'
+        '<a class="btn-ghost" href="{cancel}">取消</a>'
+        '</div></form>'
+    ).format(
+        notice=notice_html, summary=summary,
+        intro=("新建一个展会系列。建好后可以在系列页里添加会次。"
+               if creating else
+               "编辑展会系列信息。会次在「编辑 → 新建展会」里创建，"
+               "并把系列填成本系列名。"),
+        action=esc(action), token=esc(ctx.csrf_token),
+        name=esc(name), name_ro="" if creating else " readonly",
+        abbr=esc(series.get("abbr") or ""),
+        full=esc(series.get("full_name") or ""),
+        logo=_img_preview("logo", "LOGO", "logo_url", "logo_local"),
+        poster=_img_preview("poster", "海报", "poster_url", "poster_local"),
+        wiki=esc(series.get("wiki") or ""),
+        links=esc(links_text),
+        cancel=esc("/events" if creating else
+                   "/event-series/{}".format(quote_segment(name))),
+    )
+    return layout(
+        ctx, title=("新建展会系列" if creating else "编辑展会系列"),
+        body=body, active="events", wide=True,
+        breadcrumbs=[("展会", "/events"),
+                     (str(series.get("full_name") or name or "新建"), ""),
+                     ("编辑" if not creating else "新建", "")],
+    )
+
+
+def event_series_page(
+    ctx: SiteContext,
+    *,
+    series: Mapping[str, Any],
+    editions: Sequence[Mapping[str, Any]] = (),
+    can_edit: bool = False,
+    notice: str = "",
+) -> str:
+    """展会**系列**详情: 大图 + MD wiki + 会次图片网格.
+
+    ``editions`` 每项: ``{"value", "display", "count", "logo", "vol_label"}``。
+    点会次图 -> ``/event/<name>``(该会次的专辑筛选)。
+    """
+    name = str(series.get("name") or "")
+    abbr = str(series.get("abbr") or "")
+    full = str(series.get("full_name") or name)
+    logo = str(series.get("logo") or "")
+    poster = str(series.get("poster") or "")
+    title = "[{}] {}".format(esc(abbr), esc(full)) if abbr else esc(full)
+
+    # 顶部大图: 优先用海报, 没有就用 LOGO
+    big = poster or logo
+    if big:
+        hero = ('<img class="series-hero" src="{}" alt="{}" loading="lazy">'
+                .format(esc(safe_url(big)), esc(full)))
+    else:
+        hero = ('<div class="series-hero series-hero-text">{}</div>'
+                .format(esc((abbr or full or "?")[:3])))
+
+    # MD wiki -> HTML(与编辑页同一套渲染)
+    wiki_html = ""
+    wiki_src = str(series.get("wiki") or "")
+    if wiki_src.strip():
+        wiki_html = ('<section class="panel"><h2 class="section-title">介绍</h2>'
+                     '<div class="md-body">{}</div></section>'
+                     .format(markdown_to_html(wiki_src)))
+    elif can_edit:
+        wiki_html = ('<section class="panel"><h2 class="section-title">介绍</h2>'
+                     '<p class="section-note">还没有介绍。点右上角「编辑」用 '
+                     'Markdown 写一段，支持图片与外链。</p></section>')
+
+    # 会次: 图片卡片网格
+    cards = []
+    for item in editions:
+        ev_name = str(item.get("value") or "")
+        display = str(item.get("display") or ev_name)
+        count = int(item.get("count") or 0)
+        pic = str(item.get("logo") or "")
+        if pic:
+            thumb = ('<img class="edition-thumb" src="{}" alt="{}"'
+                     ' loading="lazy">').format(esc(safe_url(pic)), esc(display))
+        else:
+            tail = str(item.get("vol_label") or ev_name)
+            thumb = ('<span class="edition-thumb edition-thumb-text">{}</span>'
+                     .format(esc(tail[:8])))
+        cards.append(
+            '<a class="edition-card" href="/event/{}">{}{}'
+            '<span class="edition-count">{} 张</span></a>'.format(
+                esc(quote_segment(ev_name)), thumb,
+                '<span class="edition-name">{}</span>'.format(esc(display)),
+                esc(count)))
+    editions_html = (
+        '<div class="edition-grid">{}</div>'.format("".join(cards))
+        if cards else '<p class="section-note">这个系列还没有会次。</p>')
+
+    edit_btn = ('<p class="section-note"><a class="btn-ghost btn-xs"'
+                ' href="/event-series/{}/edit">编辑系列</a></p>'
+                .format(esc(quote_segment(name)))) if can_edit else ""
+
+    body = (
+        '{notice}'
+        '<section class="panel series-head">'
+        '<div class="series-hero-wrap">{hero}</div>'
+        '<h2 class="series-title">{title}</h2>'
+        '{edit_btn}'
+        '<p class="section-note">共 <b>{total}</b> 个会次 · <b>{albums}</b> 张专辑</p>'
+        '</section>'
+        '{wiki}'
+        '<section class="panel"><h2 class="section-title">会次<span '
+        'class="section-sub">点图进入该会次的专辑筛选</span></h2>'
+        '{editions}</section>'
+    ).format(
+        notice=(f'<div class="form-error" role="alert">{esc(notice)}</div>'
+                if notice else ""),
+        hero=hero, title=title, edit_btn=edit_btn,
+        total=esc(len(list(editions))),
+        albums=esc(sum(int(e.get("count") or 0) for e in editions)),
+        wiki=wiki_html, editions=editions_html,
+    )
+    return layout(
+        ctx, title=f"{abbr or full} · 展会系列", body=body, active="events",
+        breadcrumbs=[("展会", "/events"), (full or name, "")],
+    )
+
+
 def event_page(
     ctx: SiteContext,
     *,
@@ -1938,46 +2148,105 @@ def circles_index_page(
     return layout(ctx, title="社团索引", body=body, active="circles", subtitle="按收录数量排序")
 
 
-def events_index_page(ctx: SiteContext, *, events: Sequence[Mapping[str, Any]], kinds: Sequence[Mapping[str, Any]]) -> str:
-    # 展会索引: 名字 | 类型 | 数量 三列网格。**类型列固定宽度**, 于是右侧那列
-    # 在每一行都落在同一竖直网格上(以前是 flex 里靠 min-width 挤, 各行的
-    # 基线跟着名字长短漂移, 看起来类型列没对齐)。
-    def _event_logo(e: Mapping[str, Any], cls: str) -> str:
-        """展会缩略图: 有图出 <img>, 没图出首字占位(与社团索引一致)."""
-        name = str(e.get("value") or "")
-        src = str(e.get("logo") or "")
-        if src:
-            return ('<img class="{}" src="{}" alt="{}" loading="lazy"'
-                    ' width="28" height="28">').format(
-                        esc(cls), esc(safe_url(src)), esc(name))
-        letter = (name.strip() or "?")[:1]
-        return '<span class="{}">{}</span>'.format(esc(cls), esc(letter))
+def events_index_page(
+    ctx: SiteContext,
+    *,
+    events: Sequence[Mapping[str, Any]] = (),
+    kinds: Sequence[Mapping[str, Any]] = (),
+    series: Sequence[Mapping[str, Any]] = (),
+) -> str:
+    """展会索引: **每个系列一张卡片**, 两列网格.
 
-    rows = "".join(
-        '<li class="index-row index-row-event">'
-        '{}'
-        '<a class="index-name" href="/event/{}">{}</a>'
-        '<span class="index-kind">{}</span><span class="index-count">{} 张</span>'
-        '{}</li>'.format(
-            _event_logo(e, "event-thumb"),
-            esc(quote_segment(e.get("value") or "")),
-            esc(e.get("value") or ""),
-            esc(event_kind_label(e.get("kind"))),
-            esc(e.get("count") or 0),
-            ('<span class="event-link-mark" title="有相关链接">🔗</span>'
-             if e.get("links") else ""),
+    卡片结构::
+
+        ┌──────────────┐
+        │   LOGO/海报    │   ← 点进系列详情
+        ├──────────────┤
+        │ [M3] M3-2026秋 (M3-58) │
+        │ [M3] M3-2026春 (M3-57) │
+        │ ...（默认 5 条）        │
+        │        展开             │
+        └──────────────┘
+
+    ``series`` 是 :meth:`PublicData.event_series` 的结果(已带会次列表);
+    ``events``/``kinds`` 只在没有系列数据时兜底(老库)。
+    """
+    _no_logo = ('<span class="series-card-logo series-card-logo-text">'
+                '{}</span>')
+
+    def _card(item: Mapping[str, Any]) -> str:
+        name = str(item.get("name") or "")
+        abbr = str(item.get("abbr") or "")
+        full = str(item.get("full_name") or name)
+        logo = str(item.get("logo") or "")
+        editions = list(item.get("editions") or ())
+        # 卡片标题: 有缩写显示 "[M3] M3", 否则只显示全称
+        title = "[{}] {}".format(esc(abbr), esc(full)) if abbr else esc(full)
+        thumb = (
+            '<img class="series-card-logo" src="{}" alt="{}" loading="lazy">'
+            .format(esc(safe_url(logo)), esc(name))
+            if logo else _no_logo.format(esc((abbr or full or "?")[:2]))
         )
-        for e in events
-    )
+        rows = "".join(
+            '<li><a class="series-edition" href="/event/{}">{}</a>'
+            '<span class="series-edition-count">{} 张</span></li>'.format(
+                esc(quote_segment(str(e.get("value") or ""))),
+                esc(str(e.get("display") or e.get("value") or "")),
+                esc(e.get("count") or 0),
+            )
+            for e in editions
+        )
+        hidden = max(0, len(editions) - 5)
+        more = ('<button type="button" class="btn-ghost btn-xs series-more"'
+                ' data-series-more="1" aria-expanded="false">'
+                '展开 {} 条</button>'.format(hidden)) if hidden else ""
+        return (
+            '<article class="series-card" data-series-card="1">'
+            '<a class="series-card-head" href="/event-series/{}">{thumb}'
+            '<span class="series-card-title">{title}</span></a>'
+            '<ul class="series-editions" data-series-editions="1">{rows}</ul>'
+            '<div class="series-card-foot">{more}</div>'
+            '</article>'
+        ).format(
+            esc(quote_segment(name)),
+            thumb=thumb,
+            title=title,
+            rows=rows or '<li class="muted">还没有会次</li>',
+            more=more,
+        )
+
+    cards = "".join(_card(s) for s in series)
+    if not cards:
+        # 没有任何系列: 退回列表(老库/空库)
+        rows = "".join(
+            '<li><a class="index-name" href="/event/{}">{}</a>'
+            '<span class="index-count">{} 张</span></li>'.format(
+                esc(quote_segment(str(e.get("value") or ""))),
+                esc(str(e.get("value") or "")),
+                esc(e.get("count") or 0),
+            )
+            for e in events
+        )
+        cards = ('<p class="section-note">还没有展会系列。</p>'
+                 '<ul class="index-list">{}</ul>'.format(
+                     rows or "<li>暂无展会数据</li>"))
+    else:
+        cards = '<div class="series-grid">{}</div>'.format(cards)
+
     kind_pills = "".join(
         '<a class="pill" href="/albums?kind={}"><b>{}</b><span>{} 张</span></a>'.format(
-            esc(k.get("value") or ""), esc(k.get("label") or ""), esc(k.get("count") or 0)
-        )
+            esc(k.get("value") or ""), esc(k.get("label") or ""),
+            esc(k.get("count") or 0))
         for k in kinds
     )
-    body = f'<div class="pills">{kind_pills}</div><ul class="index-list">{rows or "<li>暂无展会数据</li>"}</ul>'
-    return layout(ctx, title="展会索引", body=body, active="events")
-
+    # 编辑者: 新建系列入口
+    _new_btn = ('<p class="section-note"><a class="btn-ghost btn-xs"'
+                ' href="/event-series/new">＋ 新建展会系列</a></p>'
+                if ctx.is_editor else "")
+    body = (_new_btn
+            + (f'<div class="pills">{kind_pills}</div>' if kind_pills else "")
+            + cards)
+    return layout(ctx, title="展会", body=body, active="events")
 
 def tags_index_page(
     ctx: SiteContext, *, tags: Sequence[Mapping[str, Any]], limit_note: str = ""
@@ -2289,15 +2558,18 @@ NEW_ENTITY_SPECS: dict[str, tuple[str, list[tuple[str, str, str, str]]]] = {
         ("avatar", "头像 URL", "text", ""),
         ("links", "相关链接", "textarea", "每行: 标签: URL"),
     ]),
-    "event": ("新建展会", [
-        ("name", "展会名", "text", "必填"),
+    "event": ("新建会次", [
+        ("name", "会次名", "text", "必填, 如 M3-2026秋"),
+        ("series", "所属系列", "text", "系列名, 如 M3 / Comic Market"),
+        ("vol", "会次号", "text", "数字, 如 58 (M3-58)"),
+        ("vol_label", "会次标签", "text", "如 M3-58 / C108"),
         ("kind", "类型", "text", "m3 / comiket 等"),
         ("year", "年份", "text", ""),
-        ("season", "季节", "text", ""),
+        ("season", "季节", "text", "春 / 秋"),
         ("start_date", "开始日期", "text", ""),
         ("end_date", "结束日期", "text", ""),
         ("tags", "标签", "text", "、分隔"),
-        ("logo_url", "展会图 URL", "text", "官网海报地址, 可留空"),
+        ("logo_url", "会次图 URL", "text", "留空则沿用系列的图"),
         ("links", "相关链接", "textarea", "每行: 标签: URL"),
     ]),
     "tag": ("新建标签", [
