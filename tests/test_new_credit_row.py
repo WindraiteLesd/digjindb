@@ -14,11 +14,11 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def _js() -> str:
-    return (ROOT / "dnh/public/static/public.js").read_text(encoding="utf-8")
+    return (ROOT / "dddb/public/static/public.js").read_text(encoding="utf-8")
 
 
 def _render():
-    from dnh.public import templates as T
+    from dddb.public import templates as T
 
     album = {
         "key": "d", "title": "T", "title_original": "T", "title_alt": "",
