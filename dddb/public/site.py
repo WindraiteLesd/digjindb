@@ -338,6 +338,8 @@ _ROUTE_MAP = {
     "link": "link",
     # 外链嵌入播放器 -> 302 到 SoundCloud / YouTube 播放器
     "embed": "embed",
+    # 展会词条的本地图片
+    "event-logo": "event_logo",
     "like": "comment_like",
     "lang": "lang",
     "login": "login",
@@ -368,7 +370,7 @@ _ROUTE_MAP = {
 
 #: 这些路由名必须有第二个路径段, 否则视为 index(或 404)
 _ENTITY_ROUTES = frozenset({"album", "circle", "event", "tag", "cover", "static",
-                              "event-date", "embed"})
+                              "event-date", "embed", "event_logo"})
 
 #: 索引页路由名 -> 实体路由名(``/circle/<x>`` 缺失时退化为 ``/circles``)
 _INDEX_OF = {"album": "albums", "circle": "circles", "event": "events", "tag": "tags"}
@@ -1863,6 +1865,8 @@ class PublicSite:
             return self.serve_static(arg)
         if name == "embed":
             return self.serve_embed(arg)
+        if name == "event_logo":
+            return self.serve_event_logo(arg)
         if name == "cover":
             return self.serve_cover(arg)
         if name == "favicon":
@@ -4623,7 +4627,9 @@ class PublicSite:
                                  season=field("season"),
                                  start_date=field("start_date"),
                                  end_date=field("end_date"),
-                                 tags=self._split_names(field("tags")))
+                                 tags=self._split_names(field("tags")),
+                                 logo_url=field("logo_url"),
+                                 links=self._parse_urls(field("links")))
                 created_name = name
                 target = "/event/" + T.quote_segment(name)
             elif kind == "tag":
@@ -4821,11 +4827,25 @@ class PublicSite:
                     year = int(text_field(values, "year").strip() or 0)
                 except ValueError:
                     year = 0
-                store.save_event(name, kind=text_field(values, "kind").strip(), year=year,
-                                 season=text_field(values, "season").strip(),
-                                 start_date=text_field(values, "start_date").strip(),
-                                 end_date=text_field(values, "end_date").strip(),
-                                 tags=self._split_names(text_field(values, "tags")))
+                # 图片/链接: 表单没带这两个字段时(老表单)保留库里的原值,
+                # 否则一次普通保存会把已有的图和链接清掉。
+                _prev = next((e for e in store.list_events()
+                              if str(e.get("name")) == name), {}) or {}
+                _has_logo_field = "logo_url" in values
+                _has_links_field = "links" in values
+                store.save_event(
+                    name, kind=text_field(values, "kind").strip(), year=year,
+                    season=text_field(values, "season").strip(),
+                    start_date=text_field(values, "start_date").strip(),
+                    end_date=text_field(values, "end_date").strip(),
+                    tags=self._split_names(text_field(values, "tags")),
+                    logo_url=(text_field(values, "logo_url").strip()
+                              if _has_logo_field
+                              else str(_prev.get("logo_url") or "")),
+                    logo_local=str(_prev.get("logo_local") or ""),
+                    links=(self._parse_urls(text_field(values, "links"))
+                           if _has_links_field
+                           else dict(_prev.get("links") or {})))
             elif kind == "tag":
                 ok, message = store.save_tag(
                     name, kind=text_field(values, "kind").strip(),
@@ -5025,14 +5045,20 @@ class PublicSite:
         base = "/event/" + T.quote_segment(name)
         url_for = T.make_url_for(base, {"group": group_by})
         kind = ""
+        logo = ""
+        links: dict[str, str] = {}
         for event in self.data.events():
             if event["value"] == name:
                 kind = str(event.get("kind") or "")
+                logo = str(event.get("logo") or "")
+                links = dict(event.get("links") or {})
                 break
         return T.event_page(
             self.context(state, active="events", search_value=name),
             name=name,
             kind=kind,
+            logo=logo,
+            links=links,
             items=[],
             groups=groups,
             group_by=group_by,
@@ -5239,6 +5265,54 @@ class PublicSite:
             parts.append("  </url>")
         parts.append("</urlset>")
         return "\n".join(parts) + "\n"
+
+    def serve_event_logo(self, name: str) -> Response:
+        """``/event-logo/<展会名>``: 展会词条的本地图片.
+
+        本地没有落盘图时 302 到 ``logo_url``(若配了), 两者都没有就 404。
+        与封面一样: 页面上引用的是本站路径, 不是源站地址。
+        """
+        wanted = str(name or "").strip()
+        if not wanted:
+            return self._plain_404()
+        logo_url = ""
+        logo_local = ""
+        if self.db_path is not None:
+            try:
+                from dddb.db import Store as _Store
+
+                store = _Store(self.db_path)
+                try:
+                    row = store.query_one(
+                        "SELECT logo_url, logo_local FROM events WHERE name = ?",
+                        (wanted,))
+                finally:
+                    store.close()
+                if row is not None:
+                    keys = row.keys()
+                    logo_url = str(row["logo_url"] or "") if "logo_url" in keys else ""
+                    logo_local = (str(row["logo_local"] or "")
+                                  if "logo_local" in keys else "")
+            except Exception:                 # noqa: BLE001 - 老库没有 events 表
+                logo_url = logo_local = ""
+        # 优先本地文件
+        if logo_local:
+            path = Path(logo_local)
+            if path.is_file():
+                try:
+                    blob = path.read_bytes()
+                except OSError:
+                    blob = b""
+                if blob:
+                    ctype = sniff_image_type(blob) or "image/png"
+                    resp = Response.binary(blob, ctype, status=200)
+                    resp.headers["Cache-Control"] = "public, max-age=86400"
+                    return resp
+        # 退回远程地址(302)
+        safe = T.safe_url(logo_url, allow_relative=False)
+        if safe:
+            return Response.redirect(safe)
+        return self._plain_404()
 
     def serve_embed(self, arg: str) -> Response:
         """``/embed/<album key>/<序号>`` -> 302 到 embed code 里的播放器地址.
