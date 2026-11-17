@@ -492,8 +492,30 @@ CREATE TABLE IF NOT EXISTS events (
     logo_url   TEXT NOT NULL DEFAULT '',
     logo_local TEXT NOT NULL DEFAULT '',
     links_json TEXT NOT NULL DEFAULT '{}',
+    -- 两级结构: 这条会次属于哪个系列; vol 是会次号(如 M3-58 的 58)
+    series     TEXT NOT NULL DEFAULT '',
+    vol        INTEGER NOT NULL DEFAULT 0,
+    vol_label  TEXT NOT NULL DEFAULT '',
     updated_at REAL NOT NULL
 );
+
+-- 展会**系列**(一等公民): 一个系列含多个会次。
+-- 用户要求展示成 "[M3] M3-2026秋 (M3-58)": 缩写与全称属于系列, 会次属于 events。
+CREATE TABLE IF NOT EXISTS event_series (
+    name        TEXT PRIMARY KEY,      -- 系列主名, 如 "M3" / "Comic Market"
+    abbr        TEXT NOT NULL DEFAULT '',   -- 缩写, 如 "M3" / "CM"
+    full_name   TEXT NOT NULL DEFAULT '',   -- 全称, 如 "Comic Market"
+    logo_url    TEXT NOT NULL DEFAULT '',
+    logo_local  TEXT NOT NULL DEFAULT '',
+    poster_url  TEXT NOT NULL DEFAULT '',
+    poster_local TEXT NOT NULL DEFAULT '',
+    wiki        TEXT NOT NULL DEFAULT '',   -- MD 语法的介绍页
+    links_json  TEXT NOT NULL DEFAULT '{}',
+    sort_order  INTEGER NOT NULL DEFAULT 0,
+    created_at  REAL NOT NULL,
+    updated_at  REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_event_series_updated ON event_series(updated_at);
 
 -- 社团(一等公民数据)。
 -- ``albums.circle`` **仍然是字符串**, 这张表按 ``name`` 与它对应 —— 这里存的是
@@ -664,7 +686,10 @@ class Store:
             return
         for name, decl in (("logo_url", "TEXT NOT NULL DEFAULT ''"),
                            ("logo_local", "TEXT NOT NULL DEFAULT ''"),
-                           ("links_json", "TEXT NOT NULL DEFAULT '{}'")):
+                           ("links_json", "TEXT NOT NULL DEFAULT '{}'"),
+                           ("series", "TEXT NOT NULL DEFAULT ''"),
+                           ("vol", "INTEGER NOT NULL DEFAULT 0"),
+                           ("vol_label", "TEXT NOT NULL DEFAULT ''")):
             if name in have:
                 continue
             try:
@@ -2066,7 +2091,9 @@ class Store:
     def save_event(self, name: str, *, kind: str = "", year: int = 0, season: str = "",
                    start_date: str = "", end_date: str = "", tags: Sequence[str] = (),
                    logo_url: str = "", logo_local: str = "",
-                   links: Mapping[str, str] | None = None) -> None:
+                   links: Mapping[str, str] | None = None,
+                   series: str = "", vol: int = 0,
+                   vol_label: str = "") -> None:
         """写入/更新一条展会.
 
         ``logo_url`` / ``logo_local`` / ``links`` 是**词条级**补充信息
@@ -2074,31 +2101,116 @@ class Store:
         """
         self.execute(
             "REPLACE INTO events(name, kind, year, season, start_date, end_date,"
-            " tags, logo_url, logo_local, links_json, updated_at)"
-            " VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            " tags, logo_url, logo_local, links_json, series, vol, vol_label,"
+            " updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (name, kind, int(year), season, start_date, end_date,
              json.dumps(list(tags), ensure_ascii=False),
              str(logo_url or ""), str(logo_local or ""),
              json.dumps(dict(links or {}), ensure_ascii=False),
+             str(series or ""), int(vol or 0), str(vol_label or ""),
              time.time()),
         )
 
-    def list_events(self) -> list[dict[str, Any]]:
-        rows = self.query("SELECT * FROM events ORDER BY year DESC, name DESC")
+    # -- 展会系列 -----------------------------------------------------------
+
+    def list_series(self) -> list[dict[str, Any]]:
+        """所有展会系列(按 sort_order, 再按名字)."""
+        rows = self.query(
+            "SELECT * FROM event_series ORDER BY sort_order, name COLLATE NOCASE")
         out = []
         for r in rows:
             d = dict(r)
-            d["tags"] = json.loads(d.get("tags") or "[]")
             try:
                 d["links"] = json.loads(d.get("links_json") or "{}")
             except ValueError:
                 d["links"] = {}
             if not isinstance(d["links"], dict):
                 d["links"] = {}
-            # 有图(本地或远程)才算 has_logo, 模板用它决定要不要渲染 <img>
             d["has_logo"] = bool(d.get("logo_local") or d.get("logo_url"))
+            d["has_poster"] = bool(d.get("poster_local") or d.get("poster_url"))
             out.append(d)
         return out
+
+    def get_series(self, name: str) -> dict[str, Any] | None:
+        if not str(name or "").strip():
+            return None
+        row = self.query_one(
+            "SELECT * FROM event_series WHERE name = ?", (str(name).strip(),))
+        if row is None:
+            return None
+        d = dict(row)
+        try:
+            d["links"] = json.loads(d.get("links_json") or "{}")
+        except ValueError:
+            d["links"] = {}
+        if not isinstance(d["links"], dict):
+            d["links"] = {}
+        d["has_logo"] = bool(d.get("logo_local") or d.get("logo_url"))
+        d["has_poster"] = bool(d.get("poster_local") or d.get("poster_url"))
+        return d
+
+    def save_series(self, name: str, *, abbr: str = "", full_name: str = "",
+                    logo_url: str = "", logo_local: str = "",
+                    poster_url: str = "", poster_local: str = "",
+                    wiki: str = "", links: Mapping[str, str] | None = None,
+                    sort_order: int = 0) -> None:
+        """写入/更新一个展会系列(按 name 覆盖)."""
+        key = str(name or "").strip()
+        if not key:
+            return
+        now = time.time()
+        existing = self.query_one(
+            "SELECT created_at FROM event_series WHERE name = ?", (key,))
+        created = float(existing["created_at"]) if existing else now
+        self.execute(
+            "REPLACE INTO event_series(name, abbr, full_name, logo_url,"
+            " logo_local, poster_url, poster_local, wiki, links_json,"
+            " sort_order, created_at, updated_at)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            (key, str(abbr or ""), str(full_name or ""),
+             str(logo_url or ""), str(logo_local or ""),
+             str(poster_url or ""), str(poster_local or ""),
+             str(wiki or ""),
+             json.dumps(dict(links or {}), ensure_ascii=False),
+             int(sort_order or 0), created, now),
+        )
+
+    def delete_series(self, name: str) -> bool:
+        key = str(name or "").strip()
+        if not key:
+            return False
+        self.execute("DELETE FROM event_series WHERE name = ?", (key,))
+        # 系列没了, 会次的 series 指向清空(会次本身保留)
+        self.execute(
+            "UPDATE events SET series = '' WHERE series = ?", (key,))
+        return True
+
+    def events_of_series(self, series: str) -> list[dict[str, Any]]:
+        """某系列下的全部会次, 按会次号倒序(新的在前)."""
+        rows = self.query(
+            "SELECT * FROM events WHERE series = ?"
+            " ORDER BY vol DESC, name DESC", (str(series or "").strip(),))
+        return [self._event_row(r) for r in rows]
+
+    @staticmethod
+    def _event_row(row: Any) -> dict[str, Any]:
+        d = dict(row)
+        try:
+            d["tags"] = json.loads(d.get("tags") or "[]")
+        except ValueError:
+            d["tags"] = []
+        try:
+            d["links"] = json.loads(d.get("links_json") or "{}")
+        except ValueError:
+            d["links"] = {}
+        if not isinstance(d["links"], dict):
+            d["links"] = {}
+        d["has_logo"] = bool(d.get("logo_local") or d.get("logo_url"))
+        return d
+
+    def list_events(self) -> list[dict[str, Any]]:
+        rows = self.query("SELECT * FROM events ORDER BY year DESC, name DESC")
+        return [self._event_row(r) for r in rows]
 
     def reset(self, *, keep_matches: bool = False) -> None:
         self.execute("DELETE FROM albums")
