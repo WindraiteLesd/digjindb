@@ -31,7 +31,7 @@ def _album(**overrides):
 
 
 def _detail(album=None, **kwargs):
-    from dnh.public import templates as T
+    from dddb.public import templates as T
 
     ctx = T.SiteContext(csrf_token="t", is_editor=True, lang="zh",
                         user={"id": 1, "username": "ed", "role": "editor"})
@@ -181,14 +181,14 @@ class TestDiscVisibleInDetail(unittest.TestCase):
 
 class TestJsAndCss(unittest.TestCase):
     def test_js_has_expand_handler(self) -> None:
-        js = (ROOT / "dnh/public/static/public.js").read_text(
+        js = (ROOT / "dddb/public/static/public.js").read_text(
             encoding="utf-8")
         self.assertIn("function setupTrackExpand(", js)
         self.assertIn("setupTrackExpand()", js)
         self.assertIn("track-extra-row", js)
 
     def test_css_has_styles(self) -> None:
-        css = (ROOT / "dnh/public/static/public.css").read_text(
+        css = (ROOT / "dddb/public/static/public.css").read_text(
             encoding="utf-8")
         for token in (".detail-actions", ".track-toggle", ".track-extra",
                       ".track-extra-row"):
