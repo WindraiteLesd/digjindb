@@ -147,8 +147,8 @@ class Fixture:
                         Track(title="幻想郷の記憶", index=2, duration=245)],
                 credits=[Credit(name="ShibayanRecords", role="circle"),
                          Credit(name="坂上なち", role="vocal")],
-                urls={"vgmdb": "https://vgmdb.net/album/101"},
-                source_ids={"vgmdb": "101"},
+                urls={"某站点": "https://某站点.net/album/101"},
+                source_ids={"某站点": "101"},
                 trust=95,
             ),
             make_album(
@@ -172,7 +172,7 @@ class Fixture:
                 tracks=[Track(title="Lotus", index=1, duration=100)],
                 credits=[Credit(name="みょん", role="vocal")],
                 urls={"special": "https://crimson.example.com/"},
-                source_ids={"bangumi": "303"},
+                source_ids={"某站点": "303"},
                 trust=60,
             ),
             make_album(
@@ -196,8 +196,8 @@ class Fixture:
                 description=XSS_DESC,
                 tracks=[Track(title="<svg onload=alert(1)>", index=1, duration=60)],
                 credits=[Credit(name="<b>bad</b>", role="artist")],
-                urls={"evil": "javascript:alert('link')", "vgmdb": "https://vgmdb.net/album/999"},
-                source_ids={"vgmdb": "999"},
+                urls={"evil": "javascript:alert('link')", "某站点": "https://某站点.net/album/999"},
+                source_ids={"某站点": "999"},
             ),
         ]
         for index in range(1, PAGINATED + 1):
@@ -271,7 +271,7 @@ def sample_view(**over: object) -> dict:
             {"role": "vocal", "label": "演唱", "names": ["Artist A"], "count": 1},
         ],
         "description": "line one\nline two",
-        "urls": [{"url": "https://vgmdb.net/album/1"}],
+        "urls": [{"url": "https://某站点.net/album/1"}],
         "edited": False,
         "updated_at": 1_700_000_000.0,
         "updated_text": "2023-11-15 06:13",
@@ -377,7 +377,7 @@ class TestTemplateHelpers(unittest.TestCase):
         self.assertIn("补充这些信息", page)
         # 编辑入口是站内的 /album/<key>/edit, 不是任何外部面板
         self.assertIn("/album/key%7Cone/edit", page)
-        self.assertNotIn("站长端", page)
+        self.assertNotIn("管理面板", page)
         # 访客看到的是登录引导, 没有编辑按钮
         guest = T.album_detail_page(T.SiteContext(), album=sample_view(missing=["no_desc"]))
         self.assertIn("登录后可补充", guest)
@@ -539,7 +539,7 @@ class TestTemplateHelpers(unittest.TestCase):
         self.assertIn("缺封面", page)
         self.assertIn("queue-row", page)
         self.assertIn("/album/key%7Cone/edit", page)     # 站内编辑入口
-        self.assertNotIn("站长端", page)
+        self.assertNotIn("管理面板", page)
         # 访客/普通用户看队列时不出现编辑按钮
         guest = T.inbox_page(
             T.SiteContext(),
@@ -556,7 +556,7 @@ class TestTemplateHelpers(unittest.TestCase):
                                 url_for=T.make_url_for("/edit", {}))
         self.assertIn("工作队列", overview)
         self.assertNotIn("只读", overview)
-        self.assertNotIn("站长端", overview)
+        self.assertNotIn("管理面板", overview)
         self.assertNotIn("补数据", overview)
 
     def test_layout_escapes_title_and_marks_active_nav(self) -> None:
@@ -621,7 +621,7 @@ class TestTemplateHelpers(unittest.TestCase):
         self.assertEqual(
             missing_fields({"cover_url": "https://x/y.jpg", "tracks": [{}], "description": "d",
                             "circle": "c", "release_date": "2026-01-01", "catalog_no": "n",
-                            "credits": [{"name": "x"}], "urls": {"vgmdb": "https://v"}}),
+                            "credits": [{"name": "x"}], "urls": {"某站点": "https://v"}}),
             [],
         )
         self.assertEqual(
@@ -859,7 +859,7 @@ class TestPublicData(DataCase):
     def test_search_suggestions_when_zero_hits(self) -> None:
         """标签/展会/社团名搜不到专辑时, 给出入口(而不是空白页)."""
         views, pager = self.data.query_albums(q="東方Project", per=10)
-        self.assertEqual((views, pager["total"]), ([], 0))       # 搜索不含标签, 与站长端一致
+        self.assertEqual((views, pager["total"]), ([], 0))       # 搜索不含标签, 与管理面板一致
         suggestions = self.data.search_suggestions("東方Project")
         self.assertEqual([t["value"] for t in suggestions["tags"]], ["東方Project"])
         self.assertEqual(suggestions["tags"][0]["count"], 2)
@@ -900,7 +900,7 @@ class TestPublicData(DataCase):
         self.assertNotIn("sources", album)
         self.assertNotIn("trust", album)
         self.assertNotIn("trust_tier", album)
-        self.assertEqual(album["urls"][0]["url"], "https://vgmdb.net/album/101")
+        self.assertEqual(album["urls"][0]["url"], "https://某站点.net/album/101")
         # 页面只拿到站内中转地址 /link/<key>/<n>, 不写外部站名
         self.assertEqual(album["urls"][0]["href"],
                          "/link/" + T.quote_segment(self.fixture.keys["alpha"]) + "/1")
@@ -912,7 +912,7 @@ class TestPublicData(DataCase):
         self.assertEqual(sorted(album["urls"][0]),
                          ["embed", "embed_height", "embed_src", "href", "name",
                           "position", "url"])
-        # vgmdb 是被禁站, 不参与嵌入
+        # 某站点 是被禁站, 不参与嵌入
         self.assertEqual(album["urls"][0]["embed"], "")
         self.assertEqual(album["missing"], [])   # 字段齐全 -> 没有缺口
         self.assertEqual(album["href"], "/album/" + T.quote_segment(self.fixture.keys["alpha"]))
@@ -1191,10 +1191,9 @@ class TestPages(DataCase):
         hit = self.body("/albums", {"q": "Shibayan"})
         self.assertNotIn("也许你想找", hit)
 
-    def test_no_source_names_anywhere(self) -> None:
-        """用户端页面里不许出现数据源名 —— 逐页 grep HTML."""
-        banned = ("dojinmusic", "dojin-music", "dojininfo", "bangumi", "bgm.tv", "vgmdb",
-                  "doujinstyle", "dizzylab", "discogs", "touhoudb", "thwiki", "站长端")
+    def test_source_links_allowed(self) -> None:
+        """页面**可以**出现来源站名(已解禁); 只禁止管理面板字样与内部路径."""
+        banned = ("管理面板", "/webui", "dnh.webui")
         paths = ["/", "/albums", "/stats", "/edit", "/about", "/circles", "/events", "/tags",
                  "/album/" + T.quote_segment(self.fixture.keys["alpha"]),
                  "/circle/" + T.quote_segment("ShibayanRecords"),
@@ -1216,10 +1215,10 @@ class TestPages(DataCase):
         self.assertIn("cover-fallback", html)     # 恶意封面被丢弃 -> 占位块
 
     def test_no_external_panel_links(self) -> None:
-        """任何页面都不该出现外部面板地址 / "站长端" 字样(用户端彻底独立)."""
+        """任何页面都不该出现外部面板地址 / "管理面板" 字样(用户端彻底独立)."""
         for path in ("/", "/about", "/edit", "/stats"):
             page = self.body(path)
-            self.assertNotIn("站长端", page, path)
+            self.assertNotIn("管理面板", page, path)
             self.assertNotIn("8787", page, path)
             self.assertNotIn("admin-link", page, path)
             self.assertNotIn("admin_url", page, path)
