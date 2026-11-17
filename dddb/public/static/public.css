@@ -2752,3 +2752,84 @@ tr.track-item.is-open .track-toggle { transform: rotate(90deg); }
   .tracklist td.num:first-child,
   .tracklist td.dur { font-size: 12px; }
 }
+
+/* ==========================================================================
+   展会词条: 索引页缩略图 + 详情页图片与相关链接
+   ========================================================================== */
+.event-thumb {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  border-radius: 6px;
+  object-fit: cover;
+  background: var(--panel-2, rgba(255, 255, 255, .06));
+  border: 1px solid var(--border-soft, #263041);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-dim);
+  vertical-align: middle;
+}
+.event-link-mark {
+  margin-left: 6px;
+  font-size: 12px;
+  opacity: .55;
+}
+/* 索引行里给缩略图留出位置 */
+.index-row-event {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.index-row-event .index-name { flex: 1 1 auto; min-width: 0; }
+.index-row-event .index-kind { flex: 0 0 auto; }
+.index-row-event .index-count { flex: 0 0 auto; }
+
+/* 详情页: 图片 + 链接 一行 */
+.event-media {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  margin: 0 0 14px;
+  padding: 12px;
+  border: 1px solid var(--border-soft, #263041);
+  border-radius: 10px;
+  background: var(--panel-2, rgba(255, 255, 255, .03));
+}
+.event-media-logo {
+  flex: 0 0 auto;
+  width: 72px;
+  height: 72px;
+}
+.event-logo {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 72px;
+  height: 72px;
+  border-radius: 10px;
+  object-fit: cover;
+  background: var(--panel, rgba(255, 255, 255, .06));
+  border: 1px solid var(--border-soft, #263041);
+}
+.event-logo-text {
+  font-size: 28px;
+  font-weight: 700;
+  color: var(--text-dim);
+}
+.event-media-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  min-height: 72px;
+  align-content: center;
+}
+
+@media (max-width: 620px) {
+  .event-media { flex-direction: column; align-items: stretch; }
+  .event-media-logo { width: 100%; }
+  .event-logo { width: 100%; height: 120px; }
+}
