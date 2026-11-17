@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-CSS = ROOT / "dnh/public/static/public.css"
+CSS = ROOT / "dddb/public/static/public.css"
 
 
 def _css() -> str:
@@ -61,13 +61,13 @@ class TestMobileArtistsVisible(unittest.TestCase):
 
     def test_template_renders_artists_cell(self) -> None:
         """详情页模板要输出艺人单元格。"""
-        tpl = (ROOT / "dnh/public/templates.py").read_text(encoding="utf-8")
+        tpl = (ROOT / "dddb/public/templates.py").read_text(encoding="utf-8")
         self.assertIn('class="track-artists"', tpl)
         self.assertIn('esc("、".join(str(a) for a in artists))', tpl)
 
     def test_artists_have_data(self) -> None:
         """有艺人数据时单元格非空(不是渲染成空串)."""
-        from dnh.public import templates as T
+        from dddb.public import templates as T
 
         ctx = T.SiteContext(csrf_token="t", lang="zh")
         html = T.album_detail_page(ctx, album={
