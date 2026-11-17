@@ -544,7 +544,7 @@ def layout(
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
 <title>{esc(title)} · {esc(ctx.site_name)}</title>
-<link rel="stylesheet" href="/static/public.css?v=52">
+<link rel="stylesheet" href="/static/public.css?v=53">
 <!-- ?v=2: 图标换过, 但静态资源被 CF/浏览器缓存 1 天, 加版本号强制刷新 -->
 <link rel="icon" href="/static/favicon.svg?v=2" type="image/svg+xml">
 <!-- 唯一的脚本: 同源外链, 只做渐进增强(CSP 只给 script-src 'self') -->
@@ -1809,6 +1809,8 @@ def event_page(
     group_by: str,
     total: int,
     url_for: Callable[..., str],
+    logo: str = "",
+    links: Mapping[str, str] | None = None,
 ) -> str:
     toggle = (
         '<div class="toggle">'
@@ -1833,8 +1835,34 @@ def event_page(
         )
     if group_by != "none" and not blocks:
         blocks.append(album_grid(items, empty_text="这场展会名下暂时没有专辑。"))
+    # 展会词条自带的图片与相关链接(可都没有)
+    _links = links or {}
+    _link_html = "".join(
+        '<a class="link-pill" href="{}" data-external="1"'
+        ' rel="nofollow noopener">{}</a>'.format(
+            esc(safe_url(url)), esc(label or url))
+        for label, url in _links.items()
+        if safe_url(url)
+    )
+    _media_html = ""
+    if logo or _link_html:
+        _logo_html = (
+            '<img class="event-logo" src="{}" alt="{}" loading="lazy">'.format(
+                esc(safe_url(logo)), esc(name))
+            if logo else
+            '<span class="event-logo event-logo-text">{}</span>'.format(
+                esc((name or "?")[:1]))
+        )
+        _media_html = (
+            '<div class="event-media">'
+            '<div class="event-media-logo">{}</div>'
+            '<div class="event-media-links">{}</div>'
+            '</div>'.format(_logo_html, _link_html or
+                            '<span class="muted">还没有相关链接。</span>')
+        )
     body = (
-        '<div class="event-head"><p class="results-count">共 <b>{}</b> 张专辑 · {}</p>{}</div>'.format(
+        _media_html
+        + '<div class="event-head"><p class="results-count">共 <b>{}</b> 张专辑 · {}</p>{}</div>'.format(
             esc(total), esc(group_by_label(group_by)), toggle
         )
         + "".join(blocks)
@@ -1914,14 +1942,30 @@ def events_index_page(ctx: SiteContext, *, events: Sequence[Mapping[str, Any]], 
     # 展会索引: 名字 | 类型 | 数量 三列网格。**类型列固定宽度**, 于是右侧那列
     # 在每一行都落在同一竖直网格上(以前是 flex 里靠 min-width 挤, 各行的
     # 基线跟着名字长短漂移, 看起来类型列没对齐)。
+    def _event_logo(e: Mapping[str, Any], cls: str) -> str:
+        """展会缩略图: 有图出 <img>, 没图出首字占位(与社团索引一致)."""
+        name = str(e.get("value") or "")
+        src = str(e.get("logo") or "")
+        if src:
+            return ('<img class="{}" src="{}" alt="{}" loading="lazy"'
+                    ' width="28" height="28">').format(
+                        esc(cls), esc(safe_url(src)), esc(name))
+        letter = (name.strip() or "?")[:1]
+        return '<span class="{}">{}</span>'.format(esc(cls), esc(letter))
+
     rows = "".join(
         '<li class="index-row index-row-event">'
+        '{}'
         '<a class="index-name" href="/event/{}">{}</a>'
-        '<span class="index-kind">{}</span><span class="index-count">{} 张</span></li>'.format(
+        '<span class="index-kind">{}</span><span class="index-count">{} 张</span>'
+        '{}</li>'.format(
+            _event_logo(e, "event-thumb"),
             esc(quote_segment(e.get("value") or "")),
             esc(e.get("value") or ""),
             esc(event_kind_label(e.get("kind"))),
             esc(e.get("count") or 0),
+            ('<span class="event-link-mark" title="有相关链接">🔗</span>'
+             if e.get("links") else ""),
         )
         for e in events
     )
@@ -2253,6 +2297,8 @@ NEW_ENTITY_SPECS: dict[str, tuple[str, list[tuple[str, str, str, str]]]] = {
         ("start_date", "开始日期", "text", ""),
         ("end_date", "结束日期", "text", ""),
         ("tags", "标签", "text", "、分隔"),
+        ("logo_url", "展会图 URL", "text", "官网海报地址, 可留空"),
+        ("links", "相关链接", "textarea", "每行: 标签: URL"),
     ]),
     "tag": ("新建标签", [
         ("name", "标签名", "text", "必填"),
