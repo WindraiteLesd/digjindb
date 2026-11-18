@@ -3093,3 +3093,10 @@ tr.track-item.is-open .track-toggle { transform: rotate(90deg); }
   flex-wrap: wrap; margin: 0 0 4px;
 }
 .new-btn-row .btn-ghost { white-space: nowrap; }
+/* 必填标记: 全站统一用红色 *(不再写"必填"两个字) */
+.req {
+  color: #f43146;
+  font-weight: 700;
+  margin-right: 3px;
+  line-height: 1;
+}
