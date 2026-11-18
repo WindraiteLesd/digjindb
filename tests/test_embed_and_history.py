@@ -87,10 +87,10 @@ class TestEmbedOnlyFromCode(unittest.TestCase):
 
     def test_any_http_embed_accepted(self) -> None:
         """**没有域名黑名单** —— 任何 http(s) 的 iframe 都接受。"""
-        ok = '<iframe src="https://某站点.net/album/1"></iframe>'
+        ok = '<iframe src="https://vgmdb.net/album/1"></iframe>'
         info = EB.extract_embed(ok)
         self.assertIsNotNone(info, "不该再有站点黑名单")
-        self.assertIn("某站点.net", info["src"])
+        self.assertIn("vgmdb.net", info["src"])
 
     def test_reject_non_http_src(self) -> None:
         for bad in ('<iframe src="javascript:alert(1)"></iframe>',
@@ -160,8 +160,8 @@ class TestEmbedRender(unittest.TestCase):
     def test_no_source_site_names_in_html(self) -> None:
         """**数据来源站**仍然不许出现(合规); 播放器平台域名允许。"""
         html = _detail(self._urls())
-        for domain in ("某站点.net", "某站点", "某站点.tv", "chii.in",
-                       "某站点.info", "某站点.com",
+        for domain in ("vgmdb.net", "bgm.tv", "bangumi.tv", "chii.in",
+                       "dojin-music.info", "doujinstyle.com",
                        "javascript:", "data:", "vbscript:"):
             self.assertNotIn(domain, html, f"页面不该出现来源站 {domain}")
 
@@ -266,7 +266,7 @@ class TestEmbedRoute(unittest.TestCase):
         """被禁来源站不能进 CSP。"""
         from dddb.public import site as SITE
 
-        for domain in ("某站点.net", "某站点", "某站点.com"):
+        for domain in ("vgmdb.net", "bgm.tv", "doujinstyle.com"):
             self.assertNotIn(domain, SITE._CSP)
 
 
@@ -439,7 +439,7 @@ class TestEmbedSave(unittest.TestCase):
 
     def test_any_site_embed_saved(self) -> None:
         """任何站点的 embed code 都能保存(不再有黑名单)。"""
-        code = '<iframe src="https://某站点.net/album/1"></iframe>'
+        code = '<iframe src="https://vgmdb.net/album/1"></iframe>'
         values, errors = self._parse([code])
         self.assertFalse(errors, f"不该拒: {errors}")
         self.assertEqual(len(values["urls"]), 1)

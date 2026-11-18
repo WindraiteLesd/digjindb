@@ -19,12 +19,12 @@ class TestNoHostBlacklist(unittest.TestCase):
         from dddb.public.data import outbound_link_reject_reason
 
         for url in (
-            "https://某站点.net/album/1",
-            "https://某站点/subject/1",
-            "https://某站点.tv/subject/1",
+            "https://vgmdb.net/album/1",
+            "https://bgm.tv/subject/1",
+            "https://bangumi.tv/subject/1",
             "https://chii.in/subject/1",
-            "https://www.某站点.info/x",
-            "https://某站点.com/?p=1",
+            "https://www.dojin-music.info/x",
+            "https://doujinstyle.com/?p=1",
             "https://dizzylab.net/album/1",
             "https://discogs.com/release/1",
             "https://touhoudb.com/A/1",
@@ -37,9 +37,9 @@ class TestNoHostBlacklist(unittest.TestCase):
     def test_subdomains_allowed(self) -> None:
         from dddb.public.data import outbound_link_reject_reason
 
-        for url in ("https://lain.某站点/pic/cover/x.jpg",
-                    "https://m.某站点.com/x",
-                    "https://www.某站点.net/album/1"):
+        for url in ("https://lain.bgm.tv/pic/cover/x.jpg",
+                    "https://m.doujinstyle.com/x",
+                    "https://www.vgmdb.net/album/1"):
             self.assertEqual(outbound_link_reject_reason(url), "")
 
     def test_security_still_enforced(self) -> None:
@@ -55,7 +55,7 @@ class TestNoHostBlacklist(unittest.TestCase):
     def test_blocked_link_host_always_empty(self) -> None:
         from dddb.public.data import blocked_link_host
 
-        for url in ("https://某站点.net/album/1", "https://example.com/"):
+        for url in ("https://vgmdb.net/album/1", "https://example.com/"):
             self.assertEqual(blocked_link_host(url), "")
 
 
@@ -91,14 +91,14 @@ class TestLinksRendered(unittest.TestCase):
         html = T.album_detail_page(ctx, album={
             "key": "d", "title": "T", "title_original": "T",
             "urls": [
-                {"name": "某站点", "url": "https://某站点.net/album/1",
+                {"name": "vgmdb", "url": "https://vgmdb.net/album/1",
                  "href": "/link/d/1", "position": 1, "embed": "",
                  "embed_height": 0, "embed_src": ""},
-                {"name": "某站点", "url": "https://某站点/subject/1",
+                {"name": "bangumi", "url": "https://bgm.tv/subject/1",
                  "href": "/link/d/2", "position": 2, "embed": "",
                  "embed_height": 0, "embed_src": ""},
-                {"name": "某站点",
-                 "url": "https://某站点.com/?p=1",
+                {"name": "doujinstyle",
+                 "url": "https://doujinstyle.com/?p=1",
                  "href": "/link/d/3", "position": 3, "embed": "",
                  "embed_height": 0, "embed_src": ""},
             ],
