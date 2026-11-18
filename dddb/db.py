@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import urllib.parse
 import re
 import sqlite3
@@ -21,6 +22,8 @@ from .models import (
     Album, Circle, CircleStaff, Credit, MatchResult, Track,
     normalize_activity_type, normalize_partial_date,
 )
+
+logger = logging.getLogger(__name__)
 #: "人工匹配"的 method 标记 —— 与匹配器共用同一个常量(只此一处定义)。
 #: 依赖方向是 db -> netease.matcher, 反方向不存在(matcher 不碰库), 所以没有环。
 #: 采集端(外部匹配)不在公开仓库里时, 用同样的字面值兜底 ——
@@ -493,7 +496,15 @@ CREATE TABLE IF NOT EXISTS events (
     logo_local TEXT NOT NULL DEFAULT '',
     links_json TEXT NOT NULL DEFAULT '{}',
     -- 两级结构: 这条会次属于哪个系列; vol 是会次号(如 M3-58 的 58)
-    series     TEXT NOT NULL DEFAULT '',
+    --
+    -- 外键是**必须的**: 早先靠手工 UPDATE 维护 events.series, 系列改名时
+    -- 漏了一条, 那个会次(1096 张专辑)就从索引里消失了。
+    -- ON UPDATE CASCADE 让"改系列名"自动带着会次走;
+    -- ON DELETE SET NULL 让"删系列"不连坐删掉会次。
+    -- NULL = 未归类(不能用空串: 空串会变成一个非法引用)。
+    series     TEXT DEFAULT NULL
+               REFERENCES event_series(name)
+               ON UPDATE CASCADE ON DELETE SET NULL,
     vol        INTEGER NOT NULL DEFAULT 0,
     vol_label  TEXT NOT NULL DEFAULT '',
     updated_at REAL NOT NULL
@@ -649,6 +660,239 @@ CREATE INDEX IF NOT EXISTS idx_comments_status ON comments(status, created_at);
 """
 
 
+def _kind_of(event: str) -> str:
+    """展会名 -> 类型(如 comiket / m3). 薄封装, 供多处复用."""
+    from .models import event_kind
+
+    return event_kind(event)
+
+
+#: 描述里常见的来源库说明(采集器写进去的, 属于来源痕迹, 不该出现在云端)
+#: 描述里常见的来源库说明(采集器写进去的, 属于来源痕迹, 不该出现在云端).
+#:
+#: 只匹配**整行就是一句来源说明**的情况, 例如 ``某站点 提供的格式: FLAC``;
+#: 不能写成宽泛的 ``^某站点.*`` —— 那会把"某站点 提供的格式: FLAC\n正文"
+#: 整段连正文一起判掉。
+_SOURCE_NOTE_PATTERNS = (
+    r"^\s*doujin\s*style\s*提供的格式\s*[:：]\s*\S+\s*$",
+    r"^\s*来源\s*[:：]\s*(某站点|某站点|bgm|doujin\s*style)\s*$",
+    r"^\s*(某站点|某站点|bgm\.tv)\s*提供的格式\s*[:：]\s*\S+\s*$",
+    r"^\s*下载自\s*(某站点|某站点|bgm|doujin\s*style)\s*$",
+)
+
+
+#: 只应保存在本地站长端的"来源数据库"域名(云端库要全部清除)
+SOURCE_HOSTS: tuple[str, ...] = (
+    "某站点.net",
+    "某站点.info",
+    "某站点",
+    "某站点.tv",
+    "某站点.biz",
+    "chii.in",
+    "lain.某站点",
+    # 第三个采集源: 某站点 —— 之前漏了, 导致 105 张专辑还带着它的链接
+    "某站点.com",
+    "某站点",
+    "doujin-styler",
+)
+
+#: 云端**不应该保留**的来源数据库标识(外链 + source_ids 键)
+SOURCE_ID_KEYS: tuple[str, ...] = (
+    "某站点", "bgm", "bgmtv", "某站点", "某站点_tv", "某站点",
+    "dojinmusic", "doujinmusic",
+)
+
+#: 只存在于 payload 里的"来源"痕迹(逐条记录/原始抓取/可信度)
+SOURCE_META_KEYS: tuple[str, ...] = (
+    "trust_by_source", "raw", "raw_payload", "sources", "source", "fetched_from",
+)
+
+
+#: 只应保存在本地站长端的"来源数据库"域名(云端库要全部清除)
+SOURCE_HOSTS: tuple[str, ...] = (
+    "某站点.net",
+    "某站点.info",
+    "某站点",
+    "某站点.tv",
+    "某站点.biz",
+    "chii.in",
+    "lain.某站点",
+    # 第三个采集源: 某站点 —— 之前漏了, 导致 105 张专辑还带着它的链接
+    "某站点.com",
+    "某站点",
+    "doujin-styler",
+)
+
+
+#: 云端**不应该保留**的来源数据库标识(外链 + source_ids 键)
+SOURCE_ID_KEYS: tuple[str, ...] = (
+    "某站点", "bgm", "bgmtv", "某站点", "某站点_tv", "某站点",
+    "dojinmusic", "doujinmusic",
+)
+
+
+#: 只存在于 payload 里的"来源"痕迹(逐条记录/原始抓取/可信度)
+SOURCE_META_KEYS: tuple[str, ...] = (
+    "trust_by_source", "raw", "raw_payload", "sources", "source", "fetched_from",
+)
+
+
+def _url_host(url: str) -> str:
+    try:
+        parsed = urllib.parse.urlsplit(str(url or ""))
+    except ValueError:
+        return ""
+    return (parsed.hostname or "").lower()
+
+
+def url_from_source_host(url: str, hosts: tuple[str, ...] = SOURCE_HOSTS) -> bool:
+    host = _url_host(url)
+    return bool(host) and any(host == h or host.endswith("." + h) for h in hosts)
+
+
+def _parse_ts(value: str) -> float:
+    if not value:
+        return time.time()
+    try:
+        from datetime import datetime
+
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return time.time()
+
+
+def _scrub_source_meta(value: Any, hosts: tuple[str, ...],
+                       id_keys: set[str]) -> tuple[Any, int]:
+    """递归剔除来源痕迹, 返回 ``(清理后的值, 剔除条数)``."""
+    removed = 0
+    if isinstance(value, dict):
+        cleaned: dict[str, Any] = {}
+        for key, item in value.items():
+            lower = str(key).strip().lower()
+            if lower in ("source", "sources") :
+                removed += 1
+                continue
+            if lower in ("trust_by_source", "raw", "raw_payload", "fetched_from"):
+                removed += 1
+                continue
+            if lower == "source_ids" and isinstance(item, dict):
+                keep = {k: v for k, v in item.items() if str(k).lower() not in id_keys}
+                removed += len(item) - len(keep)
+                if keep:
+                    cleaned[key] = keep
+                continue
+            if lower == "urls" and isinstance(item, dict):
+                keep = {k: v for k, v in item.items()
+                        if v and not url_from_source_host(str(v), hosts)}
+                removed += len(item) - len(keep)
+                if keep:
+                    cleaned[key] = keep
+                continue
+            if lower == "cover_url" and isinstance(item, str) and url_from_source_host(item, hosts):
+                removed += 1
+                continue
+            sub, sub_removed = _scrub_source_meta(item, hosts, id_keys)
+            removed += sub_removed
+            cleaned[key] = sub
+        return cleaned, removed
+    if isinstance(value, list):
+        out = []
+        for item in value:
+            sub, sub_removed = _scrub_source_meta(item, hosts, id_keys)
+            removed += sub_removed
+            out.append(sub)
+        return out, removed
+    return value, 0
+
+
+def _scrub_album_sources(album: Any) -> None:
+    """剔除专辑里**对外展示**的来源站痕迹(写库时自动执行).
+
+    重要: 本项目里 ``Album.urls`` 的语义是 **来源标识映射**
+    (``{"某站点": "https://某站点.com/?p=album&id=1042"}``),
+    跨源合并与信任判定都依赖它, 所以**绝不能在这里删** —— 展示层负责不渲染。
+    同理 ``source_ids`` / ``trust_by_source`` 也保持原样。
+
+    这里只清两类纯展示字段:
+
+    * ``cover_url`` 指向来源站 CDN 的地址(云端会用本地缓存的封面)
+    * ``description`` 里的"某站点 提供的格式: FLAC"之类来源说明
+    """
+    hosts = tuple(h.lower() for h in SOURCE_HOSTS)
+
+    # 1) 指向来源站 CDN 的封面
+    cover = str(getattr(album, "cover_url", "") or "")
+    if cover and url_from_source_host(cover, hosts):
+        album.cover_url = ""
+
+    # 2) 自由文本里的来源说明
+    description = str(getattr(album, "description", "") or "")
+    if description:
+        album.description = scrub_source_notes(description)
+
+
+def scrub_source_notes(text: str) -> str:
+    """剔除自由文本里的"来源库说明"片段(如 ``某站点 提供的格式: FLAC``).
+
+    全文可能已经被 ``clean_whitespace`` 压成一行(换行变空格), 所以不能只看行:
+    先在整段文本里按已知句式做**定点删除**, 再收拾多余空白。
+    这样 "某站点 提供的格式: FLAC 真正的简介" 也能只留下正文。
+    """
+    import re as _re
+
+    if not text or not str(text).strip():
+        return text
+    original = str(text)
+    result = original
+    # 定点删除: 句式 + 紧随的一个"格式词"(FLAC/WAV/MP3/...)
+    inline_patterns = (
+        _re.compile(r"doujin\s*style\s*提供的格式\s*[:：]?\s*"
+                    r"(flac|wav|mp3|alac|aiff|ogg|m4a|ape|tta|dsd)?",
+                    _re.I),
+        _re.compile(r"下载自\s*(某站点|某站点|bgm\.tv|doujin\s*style|某站点)",
+                    _re.I),
+        _re.compile(r"来源\s*[:：]\s*(某站点|某站点|bgm\.tv|doujin\s*style|某站点)",
+                    _re.I),
+    )
+    for pattern in inline_patterns:
+        result = pattern.sub(" ", result)
+    if result == original:
+        return text
+    # 收拾: 多空格合一, 去首尾
+    result = _re.sub(r"\s{2,}", " ", result).strip()
+    return result
+
+
+def strip_source_links(store: "Store", hosts: tuple[str, ...] = SOURCE_HOSTS,
+                       *, apply: bool = False,
+                       id_keys: tuple[str, ...] = SOURCE_ID_KEYS) -> tuple[int, int]:
+    """彻底剔除来源数据库痕迹(云端不保留, 本地站长端自行保留).
+
+    清理内容: ``urls`` 里的来源站链接、``source_ids`` 的来源库编号、
+    ``credits`` / ``tracks`` 里的 ``source`` 标记、``trust_by_source``、``raw``、
+    指向来源 CDN 的 ``cover_url``。返回 ``(受影响专辑数, 剔除条数)``。
+    """
+    affected = removed = 0
+    lowered = {k.lower() for k in id_keys}
+    for row in store.query("SELECT key, payload FROM albums"):
+        try:
+            album = json.loads(row["payload"] or "{}")
+        except ValueError:
+            continue
+        cleaned, count = _scrub_source_meta(
+            album, hosts, lowered)
+        if not count:
+            continue
+        affected += 1
+        removed += count
+        if apply:
+            store.execute(
+                "UPDATE albums SET payload = ?, updated_at = ? WHERE key = ?",
+                (json.dumps(cleaned, ensure_ascii=False, sort_keys=True),
+                 time.time(), str(row["key"])))
+    return affected, removed
+
+
 class Store:
     """聚合数据仓库."""
 
@@ -664,6 +908,7 @@ class Store:
             self._conn.executescript(_SCHEMA)
             self._conn.commit()
             self._migrate_events_media()
+            self._migrate_events_series_fk()
             self._migrate_rejections()
 
     def _migrate_events_media(self) -> None:
@@ -687,7 +932,8 @@ class Store:
         for name, decl in (("logo_url", "TEXT NOT NULL DEFAULT ''"),
                            ("logo_local", "TEXT NOT NULL DEFAULT ''"),
                            ("links_json", "TEXT NOT NULL DEFAULT '{}'"),
-                           ("series", "TEXT NOT NULL DEFAULT ''"),
+                           # series 用 NULL 表示未归类(外键下空串非法)
+                           ("series", "TEXT DEFAULT NULL"),
                            ("vol", "INTEGER NOT NULL DEFAULT 0"),
                            ("vol_label", "TEXT NOT NULL DEFAULT ''")):
             if name in have:
@@ -2099,6 +2345,15 @@ class Store:
         ``logo_url`` / ``logo_local`` / ``links`` 是**词条级**补充信息
         (展会图与官网/售票页等链接), 与 circles 的处理方式一致。
         """
+        # 外键要求 series 必须已存在。调用方(采集/编辑/测试)常常先写会次,
+        # 所以这里自动补建一个最小系列记录 —— 否则直接 FOREIGN KEY 失败。
+        _series_key = (str(series).strip() or None) if series else None
+        if _series_key:
+            exists = self.query_one(
+                "SELECT 1 FROM event_series WHERE name = ?", (_series_key,))
+            if exists is None:
+                self.save_series(_series_key)
+
         self.execute(
             "REPLACE INTO events(name, kind, year, season, start_date, end_date,"
             " tags, logo_url, logo_local, links_json, series, vol, vol_label,"
@@ -2107,7 +2362,8 @@ class Store:
              json.dumps(list(tags), ensure_ascii=False),
              str(logo_url or ""), str(logo_local or ""),
              json.dumps(dict(links or {}), ensure_ascii=False),
-             str(series or ""), int(vol or 0), str(vol_label or ""),
+             _series_key,
+             int(vol or 0), str(vol_label or ""),
              time.time()),
         )
 
@@ -2195,6 +2451,9 @@ class Store:
     @staticmethod
     def _event_row(row: Any) -> dict[str, Any]:
         d = dict(row)
+        # series 在库里是 NULL(= 未归类), 上层统一按空串处理
+        if d.get("series") is None:
+            d["series"] = ""
         try:
             d["tags"] = json.loads(d.get("tags") or "[]")
         except ValueError:
@@ -3501,204 +3760,70 @@ class Store:
         return out
 
 
-def _parse_ts(value: str) -> float:
-    if not value:
-        return time.time()
-    try:
-        from datetime import datetime
+    def _migrate_events_series_fk(self) -> None:
+        """给老库的 ``events.series`` 补外键(ON UPDATE CASCADE).
 
-        return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
-    except ValueError:
-        return time.time()
+        SQLite 不能 ``ALTER TABLE ADD CONSTRAINT``, 只能重建表:
+        建新表 -> 拷数据 -> 删旧表 -> 改名 -> 重建索引。
 
+        两个坑:
+            * 旧表的 ``series`` 是 ``NOT NULL DEFAULT ''`` —— **不能**
+              先 ``UPDATE ... SET NULL``(会 IntegrityError), 要在拷数据
+              时用 ``CASE`` 就地转换;
+            * 期间必须 ``PRAGMA foreign_keys = OFF``, 否则拷数据时
+              旧行引用孤儿系列会直接报错。
+        """
+        ddl = self._conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='events'"
+        ).fetchone()
+        if ddl is None:
+            return                                   # 表还没有, 建表语句会带上
+        if "REFERENCES event_series" in str(ddl[0] or ""):
+            return                                   # 已经有外键, 幂等
 
-#: 只应保存在本地站长端的"来源数据库"域名(云端库要全部清除)
-SOURCE_HOSTS: tuple[str, ...] = (
-    "某站点.net",
-    "某站点.info",
-    "某站点",
-    "某站点.tv",
-    "某站点.biz",
-    "chii.in",
-    "lain.某站点",
-    # 第三个采集源: 某站点 —— 之前漏了, 导致 105 张专辑还带着它的链接
-    "某站点.com",
-    "某站点",
-    "doujin-styler",
-)
-
-
-def _url_host(url: str) -> str:
-    try:
-        parsed = urllib.parse.urlsplit(str(url or ""))
-    except ValueError:
-        return ""
-    return (parsed.hostname or "").lower()
-
-
-def url_from_source_host(url: str, hosts: tuple[str, ...] = SOURCE_HOSTS) -> bool:
-    host = _url_host(url)
-    return bool(host) and any(host == h or host.endswith("." + h) for h in hosts)
-
-
-#: 云端**不应该保留**的来源数据库标识(外链 + source_ids 键)
-SOURCE_ID_KEYS: tuple[str, ...] = (
-    "某站点", "bgm", "bgmtv", "某站点", "某站点_tv", "某站点",
-    "dojinmusic", "doujinmusic",
-)
-#: 只存在于 payload 里的"来源"痕迹(逐条记录/原始抓取/可信度)
-SOURCE_META_KEYS: tuple[str, ...] = (
-    "trust_by_source", "raw", "raw_payload", "sources", "source", "fetched_from",
-)
-
-
-def _scrub_source_meta(value: Any, hosts: tuple[str, ...],
-                       id_keys: set[str]) -> tuple[Any, int]:
-    """递归剔除来源痕迹, 返回 ``(清理后的值, 剔除条数)``."""
-    removed = 0
-    if isinstance(value, dict):
-        cleaned: dict[str, Any] = {}
-        for key, item in value.items():
-            lower = str(key).strip().lower()
-            if lower in ("source", "sources") :
-                removed += 1
-                continue
-            if lower in ("trust_by_source", "raw", "raw_payload", "fetched_from"):
-                removed += 1
-                continue
-            if lower == "source_ids" and isinstance(item, dict):
-                keep = {k: v for k, v in item.items() if str(k).lower() not in id_keys}
-                removed += len(item) - len(keep)
-                if keep:
-                    cleaned[key] = keep
-                continue
-            if lower == "urls" and isinstance(item, dict):
-                keep = {k: v for k, v in item.items()
-                        if v and not url_from_source_host(str(v), hosts)}
-                removed += len(item) - len(keep)
-                if keep:
-                    cleaned[key] = keep
-                continue
-            if lower == "cover_url" and isinstance(item, str) and url_from_source_host(item, hosts):
-                removed += 1
-                continue
-            sub, sub_removed = _scrub_source_meta(item, hosts, id_keys)
-            removed += sub_removed
-            cleaned[key] = sub
-        return cleaned, removed
-    if isinstance(value, list):
-        out = []
-        for item in value:
-            sub, sub_removed = _scrub_source_meta(item, hosts, id_keys)
-            removed += sub_removed
-            out.append(sub)
-        return out, removed
-    return value, 0
-
-
-#: 描述里常见的来源库说明(采集器写进去的, 属于来源痕迹, 不该出现在云端)
-#: 描述里常见的来源库说明(采集器写进去的, 属于来源痕迹, 不该出现在云端).
-#:
-#: 只匹配**整行就是一句来源说明**的情况, 例如 ``某站点 提供的格式: FLAC``;
-#: 不能写成宽泛的 ``^某站点.*`` —— 那会把"某站点 提供的格式: FLAC\n正文"
-#: 整段连正文一起判掉。
-_SOURCE_NOTE_PATTERNS = (
-    r"^\s*doujin\s*style\s*提供的格式\s*[:：]\s*\S+\s*$",
-    r"^\s*来源\s*[:：]\s*(某站点|某站点|bgm|doujin\s*style)\s*$",
-    r"^\s*(某站点|某站点|bgm\.tv)\s*提供的格式\s*[:：]\s*\S+\s*$",
-    r"^\s*下载自\s*(某站点|某站点|bgm|doujin\s*style)\s*$",
-)
-
-
-def _scrub_album_sources(album: Any) -> None:
-    """剔除专辑里**对外展示**的来源站痕迹(写库时自动执行).
-
-    重要: 本项目里 ``Album.urls`` 的语义是 **来源标识映射**
-    (``{"某站点": "https://某站点.com/?p=album&id=1042"}``),
-    跨源合并与信任判定都依赖它, 所以**绝不能在这里删** —— 展示层负责不渲染。
-    同理 ``source_ids`` / ``trust_by_source`` 也保持原样。
-
-    这里只清两类纯展示字段:
-
-    * ``cover_url`` 指向来源站 CDN 的地址(云端会用本地缓存的封面)
-    * ``description`` 里的"某站点 提供的格式: FLAC"之类来源说明
-    """
-    hosts = tuple(h.lower() for h in SOURCE_HOSTS)
-
-    # 1) 指向来源站 CDN 的封面
-    cover = str(getattr(album, "cover_url", "") or "")
-    if cover and url_from_source_host(cover, hosts):
-        album.cover_url = ""
-
-    # 2) 自由文本里的来源说明
-    description = str(getattr(album, "description", "") or "")
-    if description:
-        album.description = scrub_source_notes(description)
-
-
-def scrub_source_notes(text: str) -> str:
-    """剔除自由文本里的"来源库说明"片段(如 ``某站点 提供的格式: FLAC``).
-
-    全文可能已经被 ``clean_whitespace`` 压成一行(换行变空格), 所以不能只看行:
-    先在整段文本里按已知句式做**定点删除**, 再收拾多余空白。
-    这样 "某站点 提供的格式: FLAC 真正的简介" 也能只留下正文。
-    """
-    import re as _re
-
-    if not text or not str(text).strip():
-        return text
-    original = str(text)
-    result = original
-    # 定点删除: 句式 + 紧随的一个"格式词"(FLAC/WAV/MP3/...)
-    inline_patterns = (
-        _re.compile(r"doujin\s*style\s*提供的格式\s*[:：]?\s*"
-                    r"(flac|wav|mp3|alac|aiff|ogg|m4a|ape|tta|dsd)?",
-                    _re.I),
-        _re.compile(r"下载自\s*(某站点|某站点|bgm\.tv|doujin\s*style|某站点)",
-                    _re.I),
-        _re.compile(r"来源\s*[:：]\s*(某站点|某站点|bgm\.tv|doujin\s*style|某站点)",
-                    _re.I),
-    )
-    for pattern in inline_patterns:
-        result = pattern.sub(" ", result)
-    if result == original:
-        return text
-    # 收拾: 多空格合一, 去首尾
-    result = _re.sub(r"\s{2,}", " ", result).strip()
-    return result
-
-
-def strip_source_links(store: "Store", hosts: tuple[str, ...] = SOURCE_HOSTS,
-                       *, apply: bool = False,
-                       id_keys: tuple[str, ...] = SOURCE_ID_KEYS) -> tuple[int, int]:
-    """彻底剔除来源数据库痕迹(云端不保留, 本地站长端自行保留).
-
-    清理内容: ``urls`` 里的来源站链接、``source_ids`` 的来源库编号、
-    ``credits`` / ``tracks`` 里的 ``source`` 标记、``trust_by_source``、``raw``、
-    指向来源 CDN 的 ``cover_url``。返回 ``(受影响专辑数, 剔除条数)``。
-    """
-    affected = removed = 0
-    lowered = {k.lower() for k in id_keys}
-    for row in store.query("SELECT key, payload FROM albums"):
+        self._conn.execute("PRAGMA foreign_keys = OFF")
         try:
-            album = json.loads(row["payload"] or "{}")
-        except ValueError:
-            continue
-        cleaned, count = _scrub_source_meta(
-            album, hosts, lowered)
-        if not count:
-            continue
-        affected += 1
-        removed += count
-        if apply:
-            store.execute(
-                "UPDATE albums SET payload = ?, updated_at = ? WHERE key = ?",
-                (json.dumps(cleaned, ensure_ascii=False, sort_keys=True),
-                 time.time(), str(row["key"])))
-    return affected, removed
+            self._conn.executescript("""
+            CREATE TABLE events_fk_new (
+                name       TEXT PRIMARY KEY,
+                kind       TEXT NOT NULL DEFAULT '',
+                year       INTEGER NOT NULL DEFAULT 0,
+                season     TEXT NOT NULL DEFAULT '',
+                start_date TEXT NOT NULL DEFAULT '',
+                end_date   TEXT NOT NULL DEFAULT '',
+                tags       TEXT NOT NULL DEFAULT '[]',
+                logo_url   TEXT NOT NULL DEFAULT '',
+                logo_local TEXT NOT NULL DEFAULT '',
+                links_json TEXT NOT NULL DEFAULT '{}',
+                series     TEXT DEFAULT NULL
+                           REFERENCES event_series(name)
+                           ON UPDATE CASCADE ON DELETE SET NULL,
+                vol        INTEGER NOT NULL DEFAULT 0,
+                vol_label  TEXT NOT NULL DEFAULT '',
+                updated_at REAL NOT NULL
+            );
+            INSERT INTO events_fk_new
+                (name, kind, year, season, start_date, end_date, tags,
+                 logo_url, logo_local, links_json, series, vol, vol_label,
+                 updated_at)
+            SELECT name, kind, year, season, start_date, end_date, tags,
+                   logo_url, logo_local, links_json,
+                   CASE
+                     WHEN series IS NULL OR series = '' THEN NULL
+                     WHEN series NOT IN (SELECT name FROM event_series)
+                       THEN NULL
+                     ELSE series
+                   END,
+                   vol, vol_label, updated_at
+            FROM events;
+            DROP TABLE events;
+            ALTER TABLE events_fk_new RENAME TO events;
+            CREATE INDEX IF NOT EXISTS idx_events_series ON events(series);
+            """)
+            bad = self._conn.execute("PRAGMA foreign_key_check").fetchall()
+            if bad:
+                logger.warning("events.series 外键检查异常: %s", bad)
+            self._conn.commit()
+        finally:
+            self._conn.execute("PRAGMA foreign_keys = ON")
 
-
-def _kind_of(event: str) -> str:
-    from .models import event_kind
-
-    return event_kind(event)
