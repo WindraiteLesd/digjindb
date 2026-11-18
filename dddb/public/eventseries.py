@@ -153,6 +153,81 @@ def parse_event_name(name: Any) -> dict[str, Any]:
             "vol": 0, "vol_label": ""}
 
 
+#: 系列 -> 拼会次标签用的前缀
+LABEL_PREFIX: dict[str, str] = {
+    "Music Media-Mix Market": "M3",
+    "M3": "M3",
+    "Comic Market": "C",
+    "CM": "C",
+}
+
+
+def _month_of(date_text: Any) -> int:
+    """从 ``2026-9-20`` / ``2026-09-20`` / ``2026/9/20`` 里取月份."""
+    text = str(date_text or "").strip()
+    if not text:
+        return 0
+    parts = text.replace("/", "-").split("-")
+    if len(parts) < 2:
+        return 0
+    try:
+        month = int(parts[1])
+    except (TypeError, ValueError):
+        return 0
+    return month if 1 <= month <= 12 else 0
+
+
+def season_from_date(date_text: Any) -> str:
+    """按**发售日月份**判断季节.
+
+        3-7 月  -> 春 (M3 春 / CM 夏コミ在 8 月, 见下)
+        8-12 月 -> 秋
+        1-2 月  -> 冬 (CM 冬コミ 12 月底, 专辑常拖到 1 月才发行)
+
+    为什么不用会次号奇偶: 库里 M3-57 标 2026 春(奇), M3-46 标 2021 春(偶),
+    奇偶规则与真实数据矛盾; 发售日才有事实依据。
+    """
+    month = _month_of(date_text)
+    if not month:
+        return ""
+    if 3 <= month <= 7:
+        return "春"
+    if month in (1, 2):
+        return "冬"
+    return "秋"
+
+
+def year_from_date(date_text: Any) -> int:
+    """从发售日里取年份."""
+    text = str(date_text or "").strip()
+    if len(text) < 4:
+        return 0
+    try:
+        year = int(text[:4])
+    except ValueError:
+        return 0
+    return year if 1990 <= year <= 2100 else 0
+
+
+def label_from_vol(series: Any, vol: Any) -> str:
+    """按会次号拼会次标签: M3 + 58 -> "M3-58"; CM + 108 -> "C108".
+
+    不认识的系列返回空串(让调用方保留用户输入)。
+    """
+    try:
+        n = int(vol or 0)
+    except (TypeError, ValueError):
+        return ""
+    if n <= 0:
+        return ""
+    prefix = LABEL_PREFIX.get(str(series or ""))
+    if not prefix:
+        return ""
+    if prefix == "C":
+        return "C{}".format(n)
+    return "{}-{}".format(prefix, n)
+
+
 def display_name(abbr: Any, full_name: Any, vol_label: Any,
                  fallback: Any = "") -> str:
     """组合成 "[M3] M3-2026秋 (M3-58)" 这种显示名.
