@@ -545,11 +545,11 @@ def layout(
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
 <title>{esc(title)} · {esc(ctx.site_name)}</title>
-<link rel="stylesheet" href="/static/public.css?v=59">
+<link rel="stylesheet" href="/static/public.css?v=60">
 <!-- ?v=2: 图标换过, 但静态资源被 CF/浏览器缓存 1 天, 加版本号强制刷新 -->
 <link rel="icon" href="/static/favicon.svg?v=2" type="image/svg+xml">
 <!-- 唯一的脚本: 同源外链, 只做渐进增强(CSP 只给 script-src 'self') -->
-<script src="/static/public.js?v=47" defer></script>
+<script src="/static/public.js?v=48" defer></script>
 </head>
 <body{_bg_attr(ctx)}>
 <a class="skip" href="#content">跳到正文</a>
@@ -2563,7 +2563,7 @@ def auth_field(name: str, label: str, value: str = "", *, kind: str = "text",
 NEW_ENTITY_SPECS: dict[str, tuple[str, list[tuple[str, str, str, str]]]] = {
     "album": ("新建专辑", [
         ("key", "编号 / 短名", "text", "留空自动生成"),
-        ("title", "标题", "text", "必填"),
+        ("title", "标题", "text", ""),
         ("title_original", "原标题", "text", ""),
         ("title_romaji", "罗马音", "text", ""),
         ("circle", "社团", "text", ""),
@@ -2575,7 +2575,6 @@ NEW_ENTITY_SPECS: dict[str, tuple[str, list[tuple[str, str, str, str]]]] = {
         ("catalog_no", "编号", "text", ""),
         ("price", "价格", "text", ""),
         ("cover_url", "封面 URL", "text", ""),
-        ("description", "简介", "textarea", ""),
         ("tags", "标签", "text", "、分隔"),
         ("genres", "曲风", "text", "、分隔"),
         ("credits", "制作人员", "textarea", "每行: 角色: 名字1、名字2"),
@@ -2583,16 +2582,15 @@ NEW_ENTITY_SPECS: dict[str, tuple[str, list[tuple[str, str, str, str]]]] = {
         ("tracks", "曲目", "textarea", "每行: 曲名 - 艺人 3:42"),
     ]),
     "circle": ("新建社团", [
-        ("name", "社团名", "text", "必填"),
+        ("name", "社团名", "text", ""),
         ("activity_type", "活动类型", "text", "同人社团 / 企业 等"),
         ("founded", "成立时间", "text", ""),
         ("last_active", "最后活动", "text", ""),
-        ("description", "简介", "textarea", ""),
         ("urls", "相关链接", "textarea", "每行: 标签: URL"),
         ("staff", "成员", "textarea", "每行: 角色: 名字"),
     ]),
     "artist": ("新建艺人", [
-        ("name", "艺名", "text", "必填"),
+        ("name", "艺名", "text", ""),
         ("name_en", "艺名(英)", "text", ""),
         ("name_ja", "艺名(日)", "text", ""),
         ("real_name", "本名", "text", ""),
@@ -2602,14 +2600,13 @@ NEW_ENTITY_SPECS: dict[str, tuple[str, list[tuple[str, str, str, str]]]] = {
         ("birthday", "生日", "text", "YYYY-MM-DD"),
         ("occupations_text", "职业", "text", "、分隔（作曲/绘画等）"),
         ("nationality", "国籍", "text", "两位国家码, 如 JP/CN"),
-        ("bio", "简介", "textarea", ""),
         ("avatar", "头像 URL", "text", ""),
         ("links", "相关链接", "textarea", "每行: 标签: URL"),
     ]),
     # 会次: 字段刻意精简 —— 「类型」= 所属系列(不重复),
     # 「会次号」从「会次标签」反推(不重复填)
     "event": ("新建会次", [
-        ("name", "会次名", "text", "必填, 如 M3-2026秋"),
+        ("name", "会次名", "text", "如 M3-2026秋"),
         ("series", "所属系列", "text", "从已有系列里选"),
         ("vol_label", "会次标签", "text", "如 M3-58 / C108"),
         ("year", "年份", "text", ""),
@@ -2621,9 +2618,8 @@ NEW_ENTITY_SPECS: dict[str, tuple[str, list[tuple[str, str, str, str]]]] = {
         ("links", "相关链接", "textarea", "每行: 标签: URL"),
     ]),
     "tag": ("新建标签", [
-        ("name", "标签名", "text", "必填"),
+        ("name", "标签名", "text", ""),
         ("kind", "类型", "text", ""),
-        ("note", "说明", "textarea", ""),
     ]),
 }
 
@@ -2704,8 +2700,12 @@ def edit_profile_page(
             itype = esc(field_type) if field_type == "date" else "text"
             input_html = (f'<input type="{itype}" name="{esc(key)}"'
                           f' value="{esc(value)}"{locked}>')
+        # 名字是必填 -> 红色 *(不用"必填"两个汉字)
+        star = ('<span class="req" aria-hidden="true">*</span>'
+                if key == "name" else "")
         rows.append(
-            f'<label class="field auth-field"><span>{esc(label)}{hint}</span>'
+            f'<label class="field auth-field"><span>{star}{esc(label)}'
+            f"{hint}</span>"
             f"{input_html}</label>"
         )
     action = "/{}/{}/edit".format(kind, quote_segment(name))
@@ -2799,12 +2799,17 @@ def new_entity_page(
             "</div></label>"
         )
 
-    def text(name: str, label: str, *, input_type: str = "text", hint: str = "") -> str:
+    def text(name: str, label: str, *, input_type: str = "text",
+             hint: str = "", required: bool = False) -> str:
         hint_html = f'<span class="field-hint">{esc(hint)}</span>' if hint else ""
+        star = ('<span class="req" aria-hidden="true">*</span>'
+                if required else "")
         return (
-            f'<label class="field auth-field"><span>{esc(label)}{hint_html}</span>'
+            f'<label class="field auth-field"><span>{star}{esc(label)}'
+            f'{hint_html}</span>'
             f'<input type="{esc(input_type)}" name="{esc(name)}"'
-            f' value="{esc(field(name))}"></label>'
+            f' value="{esc(field(name))}"'
+            f'{"" if not required else " required"}></label>'
         )
 
     def area(name: str, label: str) -> str:
@@ -2814,7 +2819,7 @@ def new_entity_page(
     if kind == "album":
         body_main = (
             '<section class="panel"><h2 class="section-title">标题</h2><div class="form-grid">'
-            + text("title", "标题")
+            + text("title", "标题", required=True)
             + text("title_original", "原标题")
             + "</div></section>"
             '<section class="panel"><h2 class="section-title">出品信息</h2>'
@@ -2846,7 +2851,7 @@ def new_entity_page(
     elif kind == "artist":
         body_main = (
             '<section class="panel"><h2 class="section-title">艺名</h2><div class="form-grid">'
-            + text("name", "艺名")
+            + text("name", "艺名", required=True)
             + text("name_en", "艺名(英)")
             + text("name_ja", "艺名(日)")
             + "</div></section>"
@@ -2872,7 +2877,7 @@ def new_entity_page(
     elif kind == "circle":
         body_main = (
             '<section class="panel"><h2 class="section-title">社团名</h2><div class="form-grid">'
-            + text("name", "社团名")
+            + text("name", "社团名", required=True)
             + text("activity_type", "活动类型", hint="同人社团 / 企业")
             + "</div></section>"
             '<section class="panel"><h2 class="section-title">活动</h2><div class="form-grid">'
@@ -2907,7 +2912,8 @@ def new_entity_page(
         body_main = (
             '<section class="panel"><h2 class="section-title">会次</h2>'
             '<div class="form-grid">'
-            + text("name", "会次名", hint="如 M3-2026秋 / C108")
+            + text("name", "会次名", hint="如 M3-2026秋 / C108",
+                   required=True)
             + _series_select
             + text("vol_label", "会次标签", hint="如 M3-58 / C108")
             + text("year", "年份")
@@ -2925,7 +2931,7 @@ def new_entity_page(
     else:  # tag
         body_main = (
             '<section class="panel"><h2 class="section-title">标签</h2><div class="form-grid">'
-            + text("name", "标签名")
+            + text("name", "标签名", required=True)
             + text("kind", "类型")
             + "</div></section>"
             '<section class="panel"><h2 class="section-title">说明</h2>'
@@ -4637,7 +4643,7 @@ def _text_input(values: Mapping[str, Any], errors: Mapping[str, Any], name: str,
     hint_html = f'<span class="field-hint">{esc(hint)}</span>' if hint else ""
     req = " required" if required else ""
     # 必填项用 * 标记(用户要求: 编辑界面用 * 显示该字段是否必填)
-    star = '<em class="req-star" title="必填">*</em>' if required else ""
+    star = '<em class="req-star" title="">*</em>' if required else ""
     err_html = f'<span class="field-error">{esc(error)}</span>' if error else ""
     return (
         f'<label class="{cls}"><span>{esc(label)}{hint_html}{star}</span>'
