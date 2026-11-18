@@ -219,6 +219,75 @@ def _album_href(key: Any) -> str:
     return "/album/" + urllib.parse.quote(str(key or ""), safe="")
 
 
+def _norm_date(value: Any) -> str:
+    """把日期补成同宽 ``YYYY-MM-DD``, 便于字符串比较.
+
+    ``2026-9-20`` -> ``2026-09-20``; ``2026`` -> ``2026-01-01``;
+    认不出来的原样返回(排序时靠字符串兜底, 至少不会崩)。
+    """
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    m = re.match(r"^(\d{4})[-/年]?(\d{1,2})?[-/月]?(\d{1,2})?", text)
+    if not m:
+        return text
+    year = m.group(1)
+    month = (m.group(2) or "1").zfill(2)
+    day = (m.group(3) or "1").zfill(2)
+    try:
+        # 合法性检查: 月份 1-12, 日 1-31
+        mi, di = int(month), int(day)
+        if not (1 <= mi <= 12) or not (1 <= di <= 31):
+            return text
+    except ValueError:
+        return text
+    return "{}-{}-{}".format(year, month, day)
+
+
+def _sort_series(items: list[dict[str, Any]], *, sort: str = "time",
+                 order: str = "desc") -> list[dict[str, Any]]:
+    """按时间或专辑数量排序展会系列.
+
+    ``sort``: ``time``(最新一届的日期) / ``count``(专辑总数)
+    ``order``: ``desc``(默认) / ``asc``
+
+    规则:
+        * 时间: 用 ``latest``(ISO 日期字符串可直接比较);
+        * 数量: 用 ``count``, 相同数量时按 ``latest`` 旧的在后兜底;
+        * **时间排序时**没有日期的系列排最后(正序倒序都一样) —— 否则
+          正序时一堆空值会占满第一屏; 数量排序不受日期影响;
+        * 最后都以名字兜底, 保证顺序稳定(刷新不会乱跳)。
+    """
+    key = "count" if str(sort or "").lower() == "count" else "time"
+    reverse = str(order or "").lower() != "asc"
+
+    def _name(item: Mapping[str, Any]) -> str:
+        return str(item.get("name") or "").lower()
+
+    if key == "count":
+        def _k(item: Mapping[str, Any]) -> tuple:
+            return (int(item.get("count") or 0),
+                    str(item.get("latest") or ""))
+    else:
+        def _k(item: Mapping[str, Any]) -> tuple:
+            return (str(item.get("latest") or ""),
+                    int(item.get("count") or 0))
+
+
+    # 稳定排序两趟: 先按名字升序, 再按主键排序。
+    # 这样值相同时保持名字升序, 而不会跟着 reverse 一起翻。
+    result = sorted(items, key=_name)
+    result = sorted(result, key=_k, reverse=reverse)
+    if key == "time":
+        # 只有**时间排序**才把"没有日期"的压到最后 —— 正序时 sorted 会
+        # 把它们翻到最前, 一屏空值看着像坏了。
+        # 数量排序时不能这么做: 有没有日期不该影响它在数量序列里的位置。
+        dated = [x for x in result if str(x.get("latest") or "")]
+        undated = [x for x in result if not str(x.get("latest") or "")]
+        return dated + undated
+    return result
+
+
 class PublicDataError(RuntimeError):
     """公开端读不到数据(表不存在 / 库损坏 / 库文件不在)."""
 
@@ -989,7 +1058,8 @@ class PublicData:
 
     # -- 聚合 ---------------------------------------------------------------
 
-    def event_series(self) -> list[dict[str, Any]]:
+    def event_series(self, *, sort: str = "time",
+                     order: str = "desc") -> list[dict[str, Any]]:
         """展会系列列表(每个系列带它的会次, 供索引页卡片用).
 
         返回::
@@ -1010,6 +1080,20 @@ class PublicData:
                 counts[_text(row["event"])] = int(row["n"])
         except sqlite3.Error:
             counts = {}
+
+        # 会次要日期: 取该会次下**最晚的** release_date。
+        # 不用 events.year —— 那列有脏数据(见过 3202), release_date 才可靠。
+        event_dates: dict[str, str] = {}
+        try:
+            for row in self._query(
+                    "SELECT event, MAX(release_date) AS d FROM albums"
+                    " WHERE event != '' AND release_date != ''"
+                    " GROUP BY event"):
+                d = _text(row["d"])
+                if d:
+                    event_dates[_text(row["event"])] = d
+        except sqlite3.Error:
+            event_dates = {}
 
         out: list[dict[str, Any]] = []
         try:
@@ -1053,12 +1137,24 @@ class PublicData:
                 if vol_label and (ev_name == vol_label
                                   or ev_name.replace(" ", "") == vol_label):
                     _mid = full or name
+                # 日期优先级: albums.release_date > events.start_date
+                #            > events.end_date > 从名字里抠年份
+                _date = event_dates.get(ev_name, "")
+                if not _date and "start_date" in ek:
+                    _date = _text(ev["start_date"])
+                if not _date and "end_date" in ek:
+                    _date = _text(ev["end_date"])
+                if not _date:
+                    _m = re.search(r"(20\d{2})", ev_name)
+                    if _m:
+                        _date = _m.group(1)
                 editions.append({
                     "value": ev_name,
                     "display": display_name(abbr_e, _mid, vol_label,
                                              ev_name),
                     "vol": int(ev["vol"] or 0) if "vol" in ek else 0,
                     "count": counts.get(ev_name, 0),
+                    "date": _norm_date(_date),
                 })
             # 库里真实的 links(编辑页要回填, 索引页不用)
             try:
@@ -1094,8 +1190,13 @@ class PublicData:
                 if "sort_order" in keys else 0,
                 "editions": editions,
                 "count": sum(e["count"] for e in editions),
+                # 系列"最新一届"的日期 —— 时间排序用它
+                "latest": max((_norm_date(e.get("date")) for e in editions),
+                              default="") if editions else "",
+                "latest_vol": max((e.get("vol") or 0) for e in editions)
+                if editions else 0,
             })
-        return out
+        return _sort_series(out, sort=sort, order=order)
 
     def events(self) -> list[dict[str, Any]]:
         rows = self._query(
