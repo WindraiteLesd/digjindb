@@ -2292,6 +2292,18 @@ class PublicSite:
                               status=403, cookies=cookies)
 
         values = form_values(body)
+        # 表单只要带 enctype="multipart/form-data"(有文件上传), 浏览器
+        # 就一定用 multipart 提交 —— form_values 解析不出任何字段, values
+        # 会全空, 保存时每个字段都读成空串(表现: 提交了但信息丢失)。
+        # 这里**统一**补一次, 不再让每个编辑路由各补一遍。
+        _ctype = str((headers or {}).get("content-type")
+                     or (headers or {}).get("Content-Type") or "")
+        if _ctype.lower().startswith("multipart/form-data") and body:
+            try:
+                values = {**dict(values),
+                          **self._values_from_multipart(headers, body)}
+            except Exception as _exc:          # noqa: BLE001
+                logger.warning("multipart 解析失败: %s", _exc)
         csrf_given = text_field(values, auth.CSRF_FIELD)
         if not csrf_given:
             # multipart/form-data(头像上传) 解析不出普通表单字段, 单独取一次
