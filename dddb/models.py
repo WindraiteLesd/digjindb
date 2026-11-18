@@ -454,7 +454,7 @@ class Album:
     event: str = ""                 # "M3-2026秋" / "C107" / "例大祭23"
     event_kind: str = ""            # m3 | comiket | reitaisai | ...
     catalog_no: str = ""
-    #: 发行公司/厂牌(外部音乐库 album.company; 同人碟常是自己社团或委托厂牌)
+    #: 发行公司/厂牌(网易云 album.company; 同人碟常是自己社团或委托厂牌)
     company: str = ""
     genres: list[str] = field(default_factory=list)
     tags: list[str] = field(default_factory=list)
@@ -476,9 +476,9 @@ class Album:
     #: source -> 该来源自己的可信度。合并时逐个取最大值,
     #: 这样 :attr:`primary_source` 能回答「这条记录主要听谁的」。
     trust_by_source: dict[str, int] = field(default_factory=dict)
-    #: 展会摊位列(如 ``F-07a``)。某站点 的 eventSpace 直接给 space_head + space_number。
+    #: 展会摊位列(如 ``F-07a``)。dojin-music 的 eventSpace 直接给 space_head + space_number。
     booth: str = ""
-    #: 展示场(M3 的「第一展示場」「第二展示場①」等)。某站点 的 eventSpace.space_hall。
+    #: 展示场(M3 的「第一展示場」「第二展示場①」等)。dojin-music 的 eventSpace.space_hall。
     #: 展位号本身(如 A-02a)只说明区域+编号, 场次要靠这个字段区分。
     hall: str = ""
     key: str = ""                    # 稳定聚合 key
@@ -535,7 +535,7 @@ class Album:
 
     @property
     def primary_url(self) -> str:
-        for src in ("某站点", "某站点", "某站点", "dizzylab", "discogs", "touhoudb", "thwiki", "dojinmusic", "vk"):
+        for src in ("doujinstyle", "vgmdb", "bangumi", "dizzylab", "discogs", "touhoudb", "thwiki", "dojinmusic", "vk"):
             if self.urls.get(src):
                 return self.urls[src]
         return next(iter(self.urls.values()), "")
@@ -738,9 +738,67 @@ def event_kind(event: str) -> str:
     return "other"
 
 
+# --------------------------------------------------------------------------
+# 网易云匹配结果
+# --------------------------------------------------------------------------
+
+
+@dataclass(slots=True)
+class NeteaseSong:
+    id: int = 0
+    name: str = ""
+    artists: list[str] = field(default_factory=list)
+    album_id: int = 0
+    album_name: str = ""
+    duration: int | None = None
+    fee: int = 0
+    #: 所属专辑封面(歌单里的曲目也有, 用来在对照页显示)
+    album_cover: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return dataclasses.asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> "NeteaseSong":
+        return cls(
+            id=int(data.get("id") or 0),
+            name=_clean_str(data.get("name")),
+            artists=list(data.get("artists") or []),
+            album_id=int(data.get("album_id") or 0),
+            album_name=_clean_str(data.get("album_name")),
+            duration=data.get("duration"),
+            fee=int(data.get("fee") or 0),
+            album_cover=_clean_str(data.get("album_cover")),
+        )
+
+
+@dataclass(slots=True)
+class NeteaseAlbum:
+    id: int = 0
+    name: str = ""
+    artists: list[str] = field(default_factory=list)
+    size: int = 0
+    publish_time: int | None = None
+    company: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return dataclasses.asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> "NeteaseAlbum":
+        return cls(
+            id=int(data.get("id") or 0),
+            name=_clean_str(data.get("name")),
+            artists=list(data.get("artists") or []),
+            size=int(data.get("size") or 0),
+            publish_time=data.get("publish_time"),
+            company=_clean_str(data.get("company")),
+        )
+
+
 @dataclass(slots=True)
 class MatchResult:
-    """专辑 -> 外部音乐库的匹配结论."""
+    """专辑 -> 网易云的匹配结论."""
 
     album_key: str = ""
     album_title: str = ""
