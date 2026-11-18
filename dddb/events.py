@@ -301,7 +301,7 @@ def release_matches_event(
 # --------------------------------------------------------------------------
 
 #: M3 届数基准 —— M3-2023春 == M3-51, 之后每年春 +2、秋 +1。
-#: 某站点 与 某站点 都用「缩写+序号」做标签/索引, 所以推算逻辑放在这里共用,
+#: DoujinStyle 与 bgm.tv 都用「缩写+序号」做标签/索引, 所以推算逻辑放在这里共用,
 #: **不要写死某个具体序号**(每届都会变)。
 M3_REF_YEAR = 2023
 M3_REF_SPRING_EDITION = 51
@@ -316,7 +316,7 @@ def m3_edition(year: int, season: str) -> int:
 def edition_label(event: "Event | None") -> str:
     """展会的「缩写+序号」标签, 例如 ``M3-58`` / ``C108`` / ``例大祭13``.
 
-    某站点 的标签、某站点 收藏条目的 tag 都是这个形式。
+    DoujinStyle 的标签、bgm.tv 收藏条目的 tag 都是这个形式。
     """
     if event is None:
         return ""
