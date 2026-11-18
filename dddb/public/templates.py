@@ -545,11 +545,11 @@ def layout(
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
 <title>{esc(title)} · {esc(ctx.site_name)}</title>
-<link rel="stylesheet" href="/static/public.css?v=56">
+<link rel="stylesheet" href="/static/public.css?v=57">
 <!-- ?v=2: 图标换过, 但静态资源被 CF/浏览器缓存 1 天, 加版本号强制刷新 -->
 <link rel="icon" href="/static/favicon.svg?v=2" type="image/svg+xml">
 <!-- 唯一的脚本: 同源外链, 只做渐进增强(CSP 只给 script-src 'self') -->
-<script src="/static/public.js?v=46" defer></script>
+<script src="/static/public.js?v=47" defer></script>
 </head>
 <body{_bg_attr(ctx)}>
 <a class="skip" href="#content">跳到正文</a>
@@ -5287,7 +5287,10 @@ def error_page(ctx: SiteContext, *, status: int, message: str) -> str:
         '<div class="empty empty-error">'
         f'<p class="empty-title">{esc(status)}</p><p>{esc(message)}</p>'
         f'{extra}'
-        '<p><a class="btn-ghost" href="/">回到首页</a> <a class="btn-ghost" href="/albums">浏览专辑</a></p>'
+        '<p class="error-actions">'
+        '<button type="button" class="btn" data-go-back="1">‹ 回到上一页</button>'
+        '<a class="btn-ghost" href="/">回到首页</a>'
+        "</p>"
         "</div>"
     )
     return layout(ctx, title=f"{status}", body=body)
