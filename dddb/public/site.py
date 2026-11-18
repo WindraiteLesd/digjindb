@@ -106,8 +106,16 @@ _PER_GROUP = 8
 _PER_GROUPS = 12
 _PER_CIRCLES = 60
 
-#: POST 请求体的上限(表单很小, 超过就是异常请求)
-MAX_BODY = 256 * 1024
+#: POST 请求体的上限.
+#:
+#: **不能设太小**: 编辑表单支持上传图片(单张上限 2MB), 而一个表单里可能有
+#: 封面 / LOGO / 海报等多个文件字段。256KB 会让"传一张稍大的图"直接 413,
+#: 表现为"提交内容过大, 内容被清空不保存, 图片不上传"(用户实测)。
+#: 这里放到 8MB: 足够多张 2MB 图 + 文本, 同时仍是个有限护栏。
+MAX_BODY = 8 * 1024 * 1024
+
+#: 单张图片上限(与 _save_*_image 里的检查一致)
+MAX_IMAGE_BODY = 2 * 1024 * 1024
 
 #: 表单里重复行(词条/外链/曲目)的上限
 MAX_ROWS = 300
@@ -2264,7 +2272,9 @@ class PublicSite:
 
         if len(body) > MAX_BODY:
             return self._html(T.error_page(
-                self.context(state), status=413, message="提交内容过大。"
+                self.context(state), status=413,
+                message="提交内容过大(上限 8MB)。"
+                        "如果是图片，请压缩到 2MB 以内。"
             ), status=413, cookies=cookies)
 
         origin_ok, origin_message = auth.same_origin(
@@ -6146,7 +6156,7 @@ class PublicHandler(BaseHTTPRequestHandler):
                 try:
                     self._send(Response.html(
                         T.error_page(self.site.context(), status=413,
-                                     message="提交内容过大。"),
+                                     message="提交内容过大(上限 8MB)。"),
                         status=413,
                     ))
                     return
