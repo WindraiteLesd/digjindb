@@ -1119,6 +1119,27 @@ class PublicData:
                     " ORDER BY vol DESC, name DESC", (name,))
             except sqlite3.Error:
                 ev_rows = []
+            # 兜底: 系列改名后可能留下孤儿会次(series 指向旧 key)。
+            # 按名字解析能对上本系列的, 也一并列出来 —— 否则那些会次
+            # 在任何系列下都查不到, 整届专辑就从索引里消失了。
+            try:
+                orphans = self._query(
+                    "SELECT * FROM events WHERE series = ''"
+                    " OR series NOT IN (SELECT name FROM event_series)")
+                extra = [ev for ev in orphans
+                         if parse_event_name(_text(ev["name"])).get("series")
+                         == name]
+                if extra:
+                    # 合并后**重新排序**, 否则孤儿只是被追加到尾部,
+                    # 会次顺序就不是"新->旧"了
+                    ev_rows = sorted(
+                        list(ev_rows) + extra,
+                        key=lambda r: (
+                            int(r["vol"] or 0) if "vol" in r.keys() else 0,
+                            _text(r["name"])),
+                        reverse=True)
+            except sqlite3.Error:
+                pass
             for ev in ev_rows:
                 ek = ev.keys()
                 ev_name = _text(ev["name"])
