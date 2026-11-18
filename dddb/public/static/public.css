@@ -3068,3 +3068,22 @@ tr.track-item.is-open .track-toggle { transform: rotate(90deg); }
 /* 报错页的操作按钮: 主按钮(回到上一页) + 次按钮(回到首页) */
 .error-actions { display: flex; gap: 10px; justify-content: center; align-items: center; flex-wrap: wrap; }
 .error-actions button { cursor: pointer; }
+/* 展会排序条: [排序] 时间↓ 专辑数量 */
+.sort-bar {
+  display: flex; align-items: center; gap: 8px;
+  flex-wrap: wrap; margin: 14px 0 4px;
+}
+.sort-label { font-size: 13px; color: var(--muted); margin-right: 2px; }
+.sort-pill {
+  padding: 5px 13px; border-radius: 999px;
+  border: 1px solid var(--border-soft, #263041);
+  font-size: 13px; color: var(--text-dim); line-height: 1.5;
+  background: var(--panel-2, rgba(255, 255, 255, .03));
+  transition: border-color .15s ease, color .15s ease;
+}
+.sort-pill:hover { text-decoration: none; border-color: var(--accent, #4f8cff); color: var(--accent); }
+.sort-pill.is-active {
+  border-color: var(--accent, #4f8cff);
+  color: var(--accent, #4f8cff);
+  font-weight: 600;
+}
