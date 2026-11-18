@@ -1,26 +1,17 @@
-# DDDB 线上站点配置样例
-# 复制为 config/config.toml 后修改（config.toml 不进版本库）
-#
-# 这些是**线上站点**的部署旋钮。站点只需要：
-#   - 会话库放哪里（不配就只放内存，重启掉线）
-#   - 对外地址是什么（写进 robots.txt / sitemap.xml）
-#   - 要不要限速
-#
-# 其余参数都可以留空使用内置默认值。
+# DoujinDigDatabase 配置样例(仅站点部分)
+
+[general]
+data_dir = "data"
+log_level = "info"
 
 [public]
-# 会话库路径。留空 = 只放内存（重启会掉线）
+# 会话库(重启不掉线)
 sessions_db = "data/sessions.sqlite3"
-
-# 站点对外地址，用于 robots.txt / sitemap.xml 里的绝对链接
-base_url = "https://example.com"
-
-# 部署在反向代理后面（信任 X-Forwarded-For / X-Forwarded-Proto）
+# 站点对外地址
+base_url = "https://www.djmb.example"
+# 确实在反向代理后面才打开
 behind_proxy = true
-
-# 限速（令牌桶）
+# 限速
 rate_limit_enabled = true
-rate_limit_rate = 30.0        # 每秒补充的令牌数
-rate_limit_burst = 60         # 普通页面突刺上限
-rate_limit_heavy_burst = 10   # 重页面（搜索/看板）突刺上限
-rate_limit_write_burst = 5    # 写操作突刺上限
+rate_limit_rate = 10.0
+rate_limit_burst = 30.0
