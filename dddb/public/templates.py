@@ -545,7 +545,7 @@ def layout(
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
 <title>{esc(title)} · {esc(ctx.site_name)}</title>
-<link rel="stylesheet" href="/static/public.css?v=58">
+<link rel="stylesheet" href="/static/public.css?v=59">
 <!-- ?v=2: 图标换过, 但静态资源被 CF/浏览器缓存 1 天, 加版本号强制刷新 -->
 <link rel="icon" href="/static/favicon.svg?v=2" type="image/svg+xml">
 <!-- 唯一的脚本: 同源外链, 只做渐进增强(CSP 只给 script-src 'self') -->
@@ -2281,10 +2281,15 @@ def events_index_page(
         + "</div>"
     )
 
-    # 编辑者: 新建系列入口
-    _new_btn = ('<p class="section-note"><a class="btn-ghost btn-xs"'
-                ' href="/event-series/new">＋ 新建展会系列</a></p>'
-                if ctx.is_editor else "")
+    # 编辑者: 「新建展会」+「新建展会系列」放同一行(用同一个按钮容器,
+    # 靠 flex gap 分开; 之前后者是独立 <p>, 会掉到下一行)
+    _new_btn = ""
+    if ctx.is_editor:
+        _new_btn = ('<div class="new-btn-row">'
+                    '<a class="btn-ghost btn-xs" href="/new/event">新建展会</a>'
+                    '<a class="btn-ghost btn-xs" href="/event-series/new">'
+                    '＋ 新建展会系列</a>'
+                    '</div>')
     body = (_new_btn
             + sort_html
             + (f'<div class="pills">{kind_pills}</div>' if kind_pills else "")
