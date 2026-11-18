@@ -4858,14 +4858,21 @@ class PublicSite:
                 if kind == "event":
                     for item in store.list_events():
                         if str(item.get("name") or "").lower() == str(name).lower():
+                            # **每个表单字段都要回填**, 少一个用户就以为"没保存"
+                            _links = "\n".join(
+                                "{}: {}".format(k, v)
+                                for k, v in (item.get("links") or {}).items())
                             return {
                                 "name": item.get("name") or name,
                                 "kind": item.get("kind") or "",
+                                "series": item.get("series") or "",
+                                "vol_label": item.get("vol_label") or "",
                                 "year": str(item.get("year") or ""),
                                 "season": item.get("season") or "",
                                 "start_date": item.get("start_date") or "",
                                 "end_date": item.get("end_date") or "",
                                 "tags": "、".join(item.get("tags") or []),
+                                "links": _links,
                             }
                 else:
                     for item in store.list_tags():
@@ -5003,7 +5010,11 @@ class PublicSite:
                     year=year, season=_season,
                     start_date=text_field(values, "start_date").strip(),
                     end_date=text_field(values, "end_date").strip(),
-                    tags=self._split_names(text_field(values, "tags")),
+                    # tags 已并入「会次标签」, 表单不再有这个字段 ——
+                    # 没带就保留库里原值, 不能清空
+                    tags=(self._split_names(text_field(values, "tags"))
+                          if "tags" in values
+                          else list(_prev.get("tags") or [])),
                     logo_url=str(_prev.get("logo_url") or ""),
                     logo_local=_logo_local,
                     links=(self._parse_urls(text_field(values, "links"))
