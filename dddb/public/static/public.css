@@ -2800,22 +2800,23 @@ tr.track-item.is-open .track-toggle { transform: rotate(90deg); }
 }
 .event-media-logo {
   flex: 0 0 auto;
-  width: 72px;
-  height: 72px;
+  width: 200px;
+  height: 260px;
 }
 .event-logo {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 72px;
-  height: 72px;
+  width: 200px;
+  height: 260px;
   border-radius: 10px;
-  object-fit: cover;
+  /* contain: 海报是竖的, cover 会把两侧裁掉("显示不全") */
+  object-fit: contain;
   background: var(--panel, rgba(255, 255, 255, .06));
   border: 1px solid var(--border-soft, #263041);
 }
 .event-logo-text {
-  font-size: 28px;
+  font-size: 56px;
   font-weight: 700;
   color: var(--text-dim);
 }
@@ -2824,8 +2825,15 @@ tr.track-item.is-open .track-toggle { transform: rotate(90deg); }
   flex-wrap: wrap;
   gap: 8px;
   align-items: center;
-  min-height: 72px;
+  min-height: 76px;
   align-content: center;
+}
+
+@media (max-width: 780px) {
+  .event-media { flex-direction: column; align-items: stretch; }
+  .event-media-logo { width: 100%; height: 200px; }
+  .event-logo { width: 100%; height: 200px; }
+  .event-media-links { min-height: 0; }
 }
 
 @media (max-width: 620px) {
