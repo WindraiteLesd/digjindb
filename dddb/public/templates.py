@@ -545,11 +545,11 @@ def layout(
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
 <title>{esc(title)} · {esc(ctx.site_name)}</title>
-<link rel="stylesheet" href="/static/public.css?v=60">
+<link rel="stylesheet" href="/static/public.css?v=61">
 <!-- ?v=2: 图标换过, 但静态资源被 CF/浏览器缓存 1 天, 加版本号强制刷新 -->
 <link rel="icon" href="/static/favicon.svg?v=2" type="image/svg+xml">
 <!-- 唯一的脚本: 同源外链, 只做渐进增强(CSP 只给 script-src 'self') -->
-<script src="/static/public.js?v=48" defer></script>
+<script src="/static/public.js?v=49" defer></script>
 </head>
 <body{_bg_attr(ctx)}>
 <a class="skip" href="#content">跳到正文</a>
@@ -2605,17 +2605,18 @@ NEW_ENTITY_SPECS: dict[str, tuple[str, list[tuple[str, str, str, str]]]] = {
     ]),
     # 会次: 字段刻意精简 —— 「类型」= 所属系列(不重复),
     # 「会次号」从「会次标签」反推(不重复填)
+    # 会次: 提示文字全部去掉(用户要求「如 ...」一律删除);
+    # tags 与 vol_label 概念重叠 -> 合并, 只留会次标签
     "event": ("新建会次", [
-        ("name", "会次名", "text", "如 M3-2026秋"),
-        ("series", "所属系列", "text", "从已有系列里选"),
-        ("vol_label", "会次标签", "text", "如 M3-58 / C108"),
+        ("name", "会次名", "text", ""),
+        ("series", "所属系列", "text", ""),
+        ("vol_label", "会次标签", "text", ""),
         ("year", "年份", "text", ""),
-        ("season", "季节", "text", "春 / 秋"),
+        ("season", "季节", "text", ""),
         ("start_date", "开始日期", "date", ""),
         ("end_date", "结束日期", "date", ""),
-        ("tags", "标签", "text", "、分隔"),
-        ("logo", "会次图", "file", "留空则沿用系列的图"),
-        ("links", "相关链接", "textarea", "每行: 标签: URL"),
+        ("logo", "会次图", "file", ""),
+        ("links", "相关链接", "textarea", ""),
     ]),
     "tag": ("新建标签", [
         ("name", "标签名", "text", ""),
@@ -2902,9 +2903,10 @@ def new_entity_page(
                 if item.get("abbr") else "")
             for item in bind_options.get("event_series", ())
         )
+        # 提示文字全部去掉(用户要求「如 ...」一律删除);
+        # tags 与会次标签概念重叠 -> 已合并, 不再单独出「分类」区
         _series_select = (
-            '<label class="field auth-field"><span>所属系列'
-            '<span class="field-hint">决定名称前缀 [缩写]</span></span>'
+            '<label class="field auth-field"><span>所属系列</span>'
             '<select name="series">'
             '<option value="">(按会次名自动识别)</option>'
             '{}</select></label>'.format(_series_opts)
@@ -2912,21 +2914,16 @@ def new_entity_page(
         body_main = (
             '<section class="panel"><h2 class="section-title">会次</h2>'
             '<div class="form-grid">'
-            + text("name", "会次名", hint="如 M3-2026秋 / C108",
-                   required=True)
+            + text("name", "会次名", required=True)
             + _series_select
-            + text("vol_label", "会次标签", hint="如 M3-58 / C108")
+            + text("vol_label", "会次标签")
             + text("year", "年份")
-            + text("season", "季节", hint="春 / 秋")
+            + text("season", "季节")
             + text("start_date", "开始日期", input_type="date")
             + text("end_date", "结束日期", input_type="date")
             + "</div></section>"
-            '<section class="panel"><h2 class="section-title">分类</h2>'
-            '<div class="form-grid">'
-            + text("tags", "标签", hint="、分隔")
-            + "</div></section>"
             f'<section class="panel"><h2 class="section-title">相关链接</h2>'
-            + area("links", "相关链接(每行: 标签: URL)") + "</section>"
+            + area("links", "相关链接") + "</section>"
         )
     else:  # tag
         body_main = (
@@ -2934,8 +2931,6 @@ def new_entity_page(
             + text("name", "标签名", required=True)
             + text("kind", "类型")
             + "</div></section>"
-            '<section class="panel"><h2 class="section-title">说明</h2>'
-            + area("note", "说明") + "</section>"
         )
 
     body = (
