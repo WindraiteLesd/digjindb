@@ -2251,6 +2251,26 @@
     });
   }
 
+
+  /* ==========================================================================
+     报错/提示页的「回到上一页」
+     没有上一页(直接打开链接、从外部跳进来)时退到首页 ——
+     否则点了 history.back() 会停在原地，看起来像按钮坏了。
+     ========================================================================== */
+  function setupGoBack() {
+    document.addEventListener("click", function (e) {
+      var btn = e.target && e.target.closest
+        ? e.target.closest("[data-go-back]") : null;
+      if (!btn) { return; }
+      e.preventDefault();
+      if (window.history && window.history.length > 1) {
+        window.history.back();
+      } else {
+        window.location.href = "/";
+      }
+    });
+  }
+
   function boot() {
     setupPasswordMatch();
     setupUsernameCheck();
@@ -2258,6 +2278,7 @@
     setupApplyDialog();
     setupTableResize();
     setupSeriesCards();
+    setupGoBack();
     setupCoverUpload();
     setupTrackRows();
     setupPairRows();
