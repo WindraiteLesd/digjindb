@@ -47,7 +47,9 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 from xml.sax.saxutils import escape as xml_escape
 
-from .eventseries import parse_event_name, vol_from_label
+from .eventseries import (label_from_vol, parse_event_name,
+                            season_from_date, vol_from_label,
+                            year_from_date)
 from . import auth
 from . import templates as T
 
@@ -4913,9 +4915,10 @@ class PublicSite:
         from dddb.models import Circle
         store = _Store(self.db_path)
         try:
+            # 会次图: 先落盘(会写回 events.logo_local), 记下路径供后面复用
+            _new_logo = ""
             if kind == "event" and isinstance(values.get("logo"), Mapping):
-                # 会次图: 先落盘, 随后在保存时写回 logo_local
-                self._save_event_logo_file(name, values)
+                _new_logo = self._save_event_logo_file(name, values)
             if kind == "artist":
                 ok, message = store.upsert_artist(name, {
                     "name_en": text_field(values, "name_en").strip(),
@@ -4954,9 +4957,8 @@ class PublicSite:
                 # 否则一次普通保存会把已有的图和链接清掉。
                 _prev = next((e for e in store.list_events()
                               if str(e.get("name")) == name), {}) or {}
-                _has_logo_field = "logo_url" in values
                 _has_links_field = "links" in values
-                # 系列/会次号: 表单没带就保留原值; 会次号从标签反推
+                # 系列/会次号: 表单没带就保留原值
                 _info = parse_event_name(name)
                 _series = (text_field(values, "series").strip()
                            if "series" in values
@@ -4965,18 +4967,33 @@ class PublicSite:
                               if "vol_label" in values
                               else str(_prev.get("vol_label")
                                        or _info["vol_label"]))
-                _vol = (_info["vol"] or vol_from_label(_vol_label)
+                # 会次号: 优先用标签里的数字; 没标签就按名字解析
+                _vol = (vol_from_label(_vol_label)
+                        or _info["vol"]
                         or int(_prev.get("vol") or 0))
+                # 会次标签/季节: 空则由系列 + 会次号**自动填**
+                if not _vol_label:
+                    _vol_label = (label_from_vol(_series, _vol)
+                                  or _info["vol_label"])
+                # 季节/年份: 表单没填就按**发售日月份**推(用户选的规则)
+                _season = text_field(values, "season").strip()
+                _start = text_field(values, "start_date").strip()
+                if not _season:
+                    _season = season_from_date(_start)
+                if not year:
+                    year = year_from_date(_start)
+                # 图片: 有上传就用新路径, 否则保留原值
+                _logo_local = _new_logo or str(_prev.get("logo_local") or "")
                 store.save_event(
-                    name, kind=text_field(values, "kind").strip(), year=year,
-                    season=text_field(values, "season").strip(),
+                    name,
+                    # kind 已从表单移除(与系列重复), 保留库里原值
+                    kind=str(_prev.get("kind") or ""),
+                    year=year, season=_season,
                     start_date=text_field(values, "start_date").strip(),
                     end_date=text_field(values, "end_date").strip(),
                     tags=self._split_names(text_field(values, "tags")),
-                    logo_url=(text_field(values, "logo_url").strip()
-                              if _has_logo_field
-                              else str(_prev.get("logo_url") or "")),
-                    logo_local=str(_prev.get("logo_local") or ""),
+                    logo_url=str(_prev.get("logo_url") or ""),
+                    logo_local=_logo_local,
                     links=(self._parse_urls(text_field(values, "links"))
                            if _has_links_field
                            else dict(_prev.get("links") or {})),
