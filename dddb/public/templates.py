@@ -545,7 +545,7 @@ def layout(
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
 <title>{esc(title)} · {esc(ctx.site_name)}</title>
-<link rel="stylesheet" href="/static/public.css?v=62">
+<link rel="stylesheet" href="/static/public.css?v=63">
 <!-- ?v=2: 图标换过, 但静态资源被 CF/浏览器缓存 1 天, 加版本号强制刷新 -->
 <link rel="icon" href="/static/favicon.svg?v=2" type="image/svg+xml">
 <!-- 唯一的脚本: 同源外链, 只做渐进增强(CSP 只给 script-src 'self') -->
@@ -2281,20 +2281,22 @@ def events_index_page(
         + "</div>"
     )
 
-    # 编辑者: 「新建展会」+「新建展会系列」放同一行(用同一个按钮容器,
-    # 靠 flex gap 分开; 之前后者是独立 <p>, 会掉到下一行)
-    _new_btn = ""
-    if ctx.is_editor:
-        _new_btn = ('<div class="new-btn-row">'
-                    '<a class="btn-ghost btn-xs" href="/new/event">新建展会</a>'
-                    '<a class="btn-ghost btn-xs" href="/event-series/new">'
-                    '＋ 新建展会系列</a>'
-                    '</div>')
-    body = (_new_btn
-            + sort_html
+    # 标题行的「新建展会」由 layout 自动渲染(active="events"),
+    # 这里**不再重复**; 只把「新建展会系列」作为额外的 title action 传上去。
+    body = (sort_html
             + (f'<div class="pills">{kind_pills}</div>' if kind_pills else "")
             + cards)
-    return layout(ctx, title="展会", body=body, active="events")
+    # 标题行按钮: 「新建展会」+「新建展会系列」并排。
+    # 传了 title_actions 就**完全由这里控制**(layout 不会再自动补一遍),
+    # 所以必须把两个都写全, 否则会丢一个。
+    title_actions = ""
+    if ctx.is_editor:
+        title_actions = (
+            '<a class="btn-ghost btn-xs" href="/new/event">新建展会</a>'
+            '<a class="btn-ghost btn-xs" href="/event-series/new">'
+            '＋ 新建展会系列</a>')
+    return layout(ctx, title="展会", body=body, active="events",
+                  title_actions=title_actions)
 
 def tags_index_page(
     ctx: SiteContext, *, tags: Sequence[Mapping[str, Any]], limit_note: str = ""
