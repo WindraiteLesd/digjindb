@@ -3065,3 +3065,6 @@ tr.track-item.is-open .track-toggle { transform: rotate(90deg); }
 }
 /* 系列详情页的相关链接(hero 下方, 居中) */
 .series-links { justify-content: center; margin: 10px 0 0; }
+/* 报错页的操作按钮: 主按钮(回到上一页) + 次按钮(回到首页) */
+.error-actions { display: flex; gap: 10px; justify-content: center; align-items: center; flex-wrap: wrap; }
+.error-actions button { cursor: pointer; }
