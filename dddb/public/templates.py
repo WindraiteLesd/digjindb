@@ -545,7 +545,7 @@ def layout(
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
 <title>{esc(title)} · {esc(ctx.site_name)}</title>
-<link rel="stylesheet" href="/static/public.css?v=57">
+<link rel="stylesheet" href="/static/public.css?v=58">
 <!-- ?v=2: 图标换过, 但静态资源被 CF/浏览器缓存 1 天, 加版本号强制刷新 -->
 <link rel="icon" href="/static/favicon.svg?v=2" type="image/svg+xml">
 <!-- 唯一的脚本: 同源外链, 只做渐进增强(CSP 只给 script-src 'self') -->
@@ -2168,6 +2168,8 @@ def events_index_page(
     events: Sequence[Mapping[str, Any]] = (),
     kinds: Sequence[Mapping[str, Any]] = (),
     series: Sequence[Mapping[str, Any]] = (),
+    sort: str = "time",
+    order: str = "desc",
 ) -> str:
     """展会索引: **每个系列一张卡片**, 两列网格.
 
@@ -2253,11 +2255,38 @@ def events_index_page(
             esc(k.get("count") or 0))
         for k in kinds
     )
+    # 排序控件: 两个维度 × 两个方向, 当前状态高亮
+    _sort = "count" if str(sort).lower() == "count" else "time"
+    _order = "asc" if str(order).lower() == "asc" else "desc"
+
+    def _sort_link(label: str, want_sort: str) -> str:
+        """点当前维度 -> 翻转方向; 点另一维度 -> 切过去(默认倒序)."""
+        if want_sort == _sort:
+            next_order = "asc" if _order == "desc" else "desc"
+        else:
+            next_order = "desc"
+        active = " is-active" if want_sort == _sort else ""
+        arrow = ""
+        if want_sort == _sort:
+            arrow = " ↑" if _order == "asc" else " ↓"
+        return ('<a class="sort-pill{}{}" href="/events?sort={}&order={}">'
+                '{}{}</a>'.format(
+                    active, "",
+                    want_sort, next_order, esc(label), arrow))
+
+    sort_html = (
+        '<div class="sort-bar"><span class="sort-label">排序</span>'
+        + _sort_link("时间", "time")
+        + _sort_link("专辑数量", "count")
+        + "</div>"
+    )
+
     # 编辑者: 新建系列入口
     _new_btn = ('<p class="section-note"><a class="btn-ghost btn-xs"'
                 ' href="/event-series/new">＋ 新建展会系列</a></p>'
                 if ctx.is_editor else "")
     body = (_new_btn
+            + sort_html
             + (f'<div class="pills">{kind_pills}</div>' if kind_pills else "")
             + cards)
     return layout(ctx, title="展会", body=body, active="events")
