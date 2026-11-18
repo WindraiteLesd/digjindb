@@ -2183,7 +2183,7 @@ class PublicSite:
         if name == "circle":
             return 200, self.page_circle(arg, params, state)
         if name == "events":
-            return 200, self.page_events(state)
+            return 200, self.page_events(state, params)
         if name == "event":
             return 200, self.page_event(arg, params, state)
         if name == "event_date":
@@ -5166,12 +5166,23 @@ class PublicSite:
             comments=comments, comment_likes=likes, liked_ids=sorted(mine),
         )
 
-    def page_events(self, state: auth.AuthState | None = None) -> str:
+    def page_events(self, state: auth.AuthState | None = None,
+                    params: Mapping[str, Any] | None = None) -> str:
+        """展会索引. 支持 ``?sort=time|count &order=desc|asc``, 默认最新在前."""
+        params = params or {}
+        sort = str(_first(params, "sort") or "time").strip().lower()
+        if sort not in ("time", "count"):
+            sort = "time"
+        order = str(_first(params, "order") or "desc").strip().lower()
+        if order not in ("asc", "desc"):
+            order = "desc"
         return T.events_index_page(
             self.context(state, active="events"),
             events=self.data.events(),
             kinds=self.data.event_kinds(),
-            series=self.data.event_series(),
+            series=self.data.event_series(sort=sort, order=order),
+            sort=sort,
+            order=order,
         )
 
     def page_event_series_edit(self, name: str,
