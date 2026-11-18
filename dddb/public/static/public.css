@@ -3087,3 +3087,9 @@ tr.track-item.is-open .track-toggle { transform: rotate(90deg); }
   color: var(--accent, #4f8cff);
   font-weight: 600;
 }
+/* 「新建展会」+「新建展会系列」并排 */
+.new-btn-row {
+  display: flex; align-items: center; gap: 10px;
+  flex-wrap: wrap; margin: 0 0 4px;
+}
+.new-btn-row .btn-ghost { white-space: nowrap; }
