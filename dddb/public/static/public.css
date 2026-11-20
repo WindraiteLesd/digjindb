@@ -2737,10 +2737,24 @@ tr.track-item.is-open .track-toggle { transform: rotate(90deg); }
     opacity: .75;
     padding-top: 0;
   }
-  /* 序号与时长: 不换行, 保持一行高 */
+  /* 序号与时长: 不换行, 保持一行高.
+     **必须重置 width** —— 桌面规则给了 52/56px 的固定宽度, 在 grid
+     里会溢出到相邻单元格, 表现为"曲目号和曲名重叠"。 */
+  .tracklist td.num,
   .tracklist td.num:first-child,
   .tracklist td.dur {
+    width: auto;
+    min-width: 0;
+    max-width: none;
     white-space: nowrap;
+  }
+  /* 序号在窄屏靠左更整齐(桌面是右对齐) */
+  .tracklist td.num:first-child {
+    text-align: left;
+  }
+  /* 时长贴右, 但不要撑破 */
+  .tracklist td.dur {
+    text-align: right;
   }
   /* 没有艺人时那一行不占高度 */
   .tracklist td.track-artists:empty { display: none; }
