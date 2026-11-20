@@ -545,7 +545,7 @@ def layout(
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
 <title>{esc(title)} · {esc(ctx.site_name)}</title>
-<link rel="stylesheet" href="/static/public.css?v=63">
+<link rel="stylesheet" href="/static/public.css?v=64">
 <!-- ?v=2: 图标换过, 但静态资源被 CF/浏览器缓存 1 天, 加版本号强制刷新 -->
 <link rel="icon" href="/static/favicon.svg?v=2" type="image/svg+xml">
 <!-- 唯一的脚本: 同源外链, 只做渐进增强(CSP 只给 script-src 'self') -->
