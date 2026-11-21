@@ -545,11 +545,12 @@ def layout(
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
 <title>{esc(title)} · {esc(ctx.site_name)}</title>
-<link rel="stylesheet" href="/static/public.css?v=66">
+<link rel="stylesheet" href="/static/public.css?v=67">
 <!-- ?v=2: 图标换过, 但静态资源被 CF/浏览器缓存 1 天, 加版本号强制刷新 -->
 <link rel="icon" href="/static/favicon.svg?v=2" type="image/svg+xml">
 <!-- 唯一的脚本: 同源外链, 只做渐进增强(CSP 只给 script-src 'self') -->
-<script src="/static/public.js?v=52" defer></script>
+<script src="/static/public.js?v=53" defer></script>
+<script src="/static/cover-crop.js?v=1" defer></script>
 </head>
 <body{_bg_attr(ctx)}>
 <a class="skip" href="#content">跳到正文</a>
@@ -4766,6 +4767,42 @@ def _track_row_html(row: Mapping[str, Any], disc: int, position: int) -> str:
 
 
 
+def _photos_html(key: Any, ctx: SiteContext,
+                 album: Mapping[str, Any]) -> str:
+    """「其他照片」区: 与封面分开, 可加备注.
+
+    用户要求: "右侧加号是添加其他照片，其他照片不含封面，可以配备注"
+
+    照片**不参与 cover_local** —— 它只是附加图, 不影响封面。
+    """
+    from .photos import photos_of
+
+    photos = photos_of(album.get("photos") or [])
+    cards = []
+    for ph in photos:
+        url = esc(ph.get("url") or "")
+        note = esc(ph.get("note") or "")
+        cards.append(
+            '<figure class="photo-card">'
+            '<img src="{}" alt="照片" loading="lazy">'
+            '<input type="text" class="photo-note" value="{}"'
+            ' placeholder="备注（可选）" maxlength="200"'
+            ' data-photo-note="{}">'
+            '<button type="button" class="photo-del" title="删除"'
+            ' aria-label="删除这张照片" data-photo-del="{}">✕</button>'
+            '</figure>'.format(url, note, url, url))
+    return (
+        '<div class="photo-block" data-photo-block="1">'
+        '<div class="photo-head"><span>其他照片'
+        '<span class="field-hint">不参与封面，可加备注</span></span>'
+        '<button type="button" class="btn-ghost btn-xs"'
+        ' data-photo-add="1">＋ 添加照片</button></div>'
+        '<div class="photo-grid">{}</div>'
+        '</div>'.format("".join(cards) or
+                        '<p class="field-hint">还没有照片</p>')
+    )
+
+
 def edit_album_page(
     ctx: SiteContext,
     *,
@@ -5074,14 +5111,21 @@ def edit_album_page(
             f' data-cover-next="/album/{esc(quote_segment(key))}/edit"'
             # 封面地址由服务端直接给: 前端不必从 next 反推(反推错就图裂)
             f' data-cover-src="/cover/{esc(quote_segment(key))}"'
+            # 附图(其他照片)的三个接口: 上传 / 删除 / 改备注
+            f' data-photo-action="/album/{esc(quote_segment(key))}/photo"'
+            f' data-photo-del-action="/album/{esc(quote_segment(key))}/photo/del"'
+            f' data-photo-note-action="/album/{esc(quote_segment(key))}/photo/note"'
             f' data-cover-token="{esc(ctx.csrf_token)}">'
             f'<input type="file" name="cover" id="cover-input"'
             f' accept="image/png,image/jpeg,image/webp" class="cover-file">'
             f'<p class="cover-picked" id="cover-picked"></p>'
             f'<button type="button" class="btn-ghost btn-xs cover-upload-btn"'
             f' data-cover-upload="1">上传封面</button>'
-            f'<p class="field-hint">PNG / JPEG / WebP，≤2MB；上传后会替换当前封面</p>'
+            f'<p class="field-hint">PNG / JPEG / WebP，≤2MB；'
+            f'选择后先调整范围，确认才上传</p>'
             f'</div></div>'
+            # **其他照片**: 不含封面, 可加备注
+            + _photos_html(key, ctx, album)
         )
     _cards: dict[str, str] = {}
     _cards["cover"] = _card(

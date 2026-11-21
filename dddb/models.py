@@ -493,6 +493,8 @@ class Album:
     cover_v: str = ""
     tracks: list[Track] = field(default_factory=list)
     credits: list[Credit] = field(default_factory=list)
+    #: 附图(不参与封面): ``[{"url": ..., "path": ..., "note": ...}]``
+    photos: list[dict[str, Any]] = field(default_factory=list)
     description: str = ""
     price: str = ""
     urls: dict[str, str] = field(default_factory=dict)       # source -> url
@@ -696,6 +698,7 @@ class Album:
             "cover_v": self.cover_v,
             "tracks": [t.to_dict() for t in self.tracks],
             "credits": [c.to_dict() for c in self.credits],
+            "photos": [dict(p) for p in self.photos],
             "description": self.description,
             "price": self.price,
             "urls": dict(self.urls),
@@ -733,6 +736,7 @@ class Album:
             cover_v=_clean_str(data.get("cover_v")),
             tracks=[Track.from_dict(t) for t in (data.get("tracks") or [])],
             credits=[Credit.from_dict(c) for c in (data.get("credits") or [])],
+            photos=[dict(p) for p in (data.get("photos") or []) if isinstance(p, dict)],
             description=_clean_str(data.get("description")),
             price=_clean_str(data.get("price")),
             urls=dict(data.get("urls") or {}),

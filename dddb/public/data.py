@@ -750,6 +750,13 @@ class PublicData:
             "tags": tags,
             "genres": genres,
             "has_cover": has_cover,
+            # 附图(不参与封面): 与 credits/tracks 同级的附加数据
+            "photos": [
+                {"url": str(p.get("url") or ""),
+                 "note": str(p.get("note") or "")}
+                for p in (payload.get("photos") or [])
+                if isinstance(p, dict) and str(p.get("url") or "")
+            ] if isinstance(payload.get("photos"), list) else [],
             "cover_local": cover_local,
             "cover_url": cover_remote,
             "cover": cover_href,

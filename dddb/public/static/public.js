@@ -2359,13 +2359,14 @@
     setupTableResize();
     setupSeriesCards();
     setupGoBack();
-    setupCoverUpload();
+    // 封面上传改由 cover-crop.js 接管(带裁切预览)
+    // setupCoverUpload();
     setupTrackRows();
     setupPairRows();
     setupNoEnterSubmit();
     setupPeopleChips();
     setupCreditPeople();
-    setupCoverGallery();
+    // setupCoverGallery();   // 同上: 由 cover-crop.js 接管
     setupEditDraft();
     setupDialogs();
     setupAppearance();

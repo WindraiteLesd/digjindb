@@ -94,7 +94,8 @@ logger = logging.getLogger("dddb.public")
 STATIC_DIR = Path(__file__).with_name("static")
 
 #: 允许直接发送的静态文件白名单 —— 不按用户输入拼路径, 从根上杜绝目录穿越
-STATIC_FILES = ("public.css", "public.js", "favicon.svg", "logo.svg")
+STATIC_FILES = ("public.css", "public.js", "cover-crop.js",
+                "favicon.svg", "logo.svg")
 
 #: 用户端默认端口
 DEFAULT_PORT = 8940
@@ -361,6 +362,7 @@ _ROUTE_MAP = {
     "about": "about",
     "static": "static",
     "cover": "cover",
+    "photo": "photo",
     "search": "search",
     "favicon.ico": "favicon",
     "link": "link",
@@ -465,6 +467,18 @@ def parse_route(path: str) -> dict[str, str]:
         if rest:
             return {"name": "event_series_page", "arg": "/".join(rest)}
         return {"name": "events", "arg": ""}
+    # 附图: /album/<key>/photo, /photo/del, /photo/note
+    if name == "album" and len(rest) == 2 and rest[-1].lower() == "photo":
+        return {"name": "album_photo", "arg": rest[0]}
+    if name == "album" and len(rest) >= 2 and rest[-2].lower() == "photo":
+        tail = rest[-1].lower()
+        if tail == "del":
+            return {"name": "album_photo_del",
+                    "arg": "/".join(rest[:-2])}
+        if tail == "note":
+            return {"name": "album_photo_note",
+                    "arg": "/".join(rest[:-2])}
+        return {"name": "album_photo", "arg": "/".join(rest)}
     if name == "album" and len(rest) >= 2 and rest[-1].lower() == "history":
         return {"name": "album_history", "arg": "/".join(rest[:-1])}
     # 展会名 -> 日期(编辑页"发售日自动匹配"用, 只读)
@@ -1960,6 +1974,8 @@ class PublicSite:
             return self.serve_series_image(str(arg or ""), "poster")
         if name == "cover":
             return self.serve_cover(arg)
+        if name == "photo":
+            return self.serve_photo(arg)
         if name == "favicon":
             return self.serve_static("favicon.svg")
         if name == "username_check":
@@ -2413,6 +2429,15 @@ class PublicSite:
         if name == "album_cover":
             return self._do_album_cover(route.get("arg") or "", state, body,
                                         headers, cookies, values)
+        if name == "album_photo":
+            return self._do_album_photo(route.get("arg") or "", state, body,
+                                        headers, cookies, values)
+        if name == "album_photo_del":
+            return self._do_album_photo_del(route.get("arg") or "", state,
+                                            values, cookies)
+        if name == "album_photo_note":
+            return self._do_album_photo_note(route.get("arg") or "", state,
+                                             values, cookies)
         if name == "album_revert":
             return self._do_album_revert(values, state, cookies)
         if name in ("comment_delete", "comment_report"):
@@ -3043,6 +3068,191 @@ class PublicSite:
         except Exception:                # noqa: BLE001
             pass
         return True
+
+    def serve_photo(self, arg: str) -> Response:
+        """``/photo/<album_key>/<name>``: 发附图文件."""
+        from urllib.parse import unquote
+
+        raw = unquote(str(arg or ""))
+        if "/" not in raw:
+            return self._plain_404()
+        album_key, _, name = raw.rpartition("/")
+        if not album_key or not name or "/" in name or ".." in name:
+            return self._plain_404()
+        covers = getattr(self.data, "covers_dir", None)
+        if not covers:
+            return self._plain_404()
+        from .photos import photo_dir
+
+        folder = photo_dir(covers, album_key)
+        target = (folder / name).resolve()
+        try:
+            target.relative_to(folder.resolve())
+        except ValueError:
+            return self._plain_404()
+        if not target.is_file():
+            return self._plain_404()
+        try:
+            blob = target.read_bytes()
+        except OSError:
+            return self._plain_404()
+        resp = Response.binary(blob, sniff_image_type(blob) or "image/jpeg",
+                               status=200)
+        resp.headers["Cache-Control"] = "public, max-age=3600"
+        return resp
+
+    def _do_album_photo(self, key: str, state: auth.AuthState, body: bytes,
+                        headers: Mapping[str, Any], cookies: list[str],
+                        values: Mapping[str, Any] | None = None) -> Response:
+        """POST /album/<key>/photo: 上传一张**其他照片**(不参与封面)."""
+        import time as _t
+        import uuid
+
+        from .photos import MAX_PHOTO_BYTES, add_photo, photo_dir
+
+        key = str(key or "").strip().rstrip("/")
+        if not key or self.db_path is None:
+            return self._plain_404()
+        if not self.can_edit(state):
+            return self._html(self.forbidden(state, "只有编辑者才能上传照片。"),
+                              status=403, cookies=cookies)
+        album = self.data.get_album(key)
+        if album is None:
+            return self._html(T.error_page(self.context(state), status=404,
+                                           message="没有这张专辑: " + key),
+                              status=404, cookies=cookies)
+
+        upload = parse_upload(headers, body, "photo")
+        if upload is None:
+            return self._html(self.forbidden(state, "没有收到图片。"),
+                              status=400, cookies=cookies)
+        blob, ctype = upload
+        mime = ctype.split(";")[0].strip().lower()
+        ext = {"image/png": ".png", "image/jpeg": ".jpg",
+               "image/webp": ".webp"}.get(mime, ".jpg")
+        if len(blob) > MAX_PHOTO_BYTES:
+            return self._html(self.forbidden(state, "照片不能超过 4MB。"),
+                              status=400, cookies=cookies)
+
+        covers = getattr(self.data, "covers_dir", None)
+        if not covers:
+            return self._html(self.forbidden(state, "封面目录未配置。"),
+                              status=503, cookies=cookies)
+        folder = photo_dir(covers, key)
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+            name = uuid.uuid4().hex[:16] + ext
+            (folder / name).write_bytes(blob)
+        except OSError as exc:
+            return self._html(self.forbidden(state, "保存失败: " + str(exc)),
+                              status=500, cookies=cookies)
+
+        url = "/photo/{}/{}".format(T.quote_segment(key), name)
+        note = text_field(values, "note")
+        from dddb.db import Store as _Store
+
+        store = _Store(self.db_path)
+        try:
+            row = store.query_one(
+                "SELECT payload FROM albums WHERE key = ?", (key,))
+            payload = str(row["payload"] or "{}") if row else "{}"
+            new_payload, ok = add_photo(payload, url=url,
+                                        path=str(folder / name), note=note)
+            if not ok:
+                try:
+                    (folder / name).unlink()
+                except OSError:
+                    pass
+                return self._html(
+                    self.forbidden(state, "照片已达上限或重复。"),
+                    status=400, cookies=cookies)
+            store.execute("UPDATE albums SET payload = ? WHERE key = ?",
+                          (json.dumps(new_payload, ensure_ascii=False), key))
+        finally:
+            store.close()
+        try:
+            self.data.invalidate()
+        except Exception:                     # noqa: BLE001
+            pass
+        return Response.redirect(
+            "/album/{}/edit?t={}".format(T.quote_segment(key),
+                                         int(_t.time())), status=303)
+
+    def _do_album_photo_del(self, key: str, state: auth.AuthState,
+                            values: Mapping[str, Any],
+                            cookies: list[str]) -> Response:
+        """删掉一张附图(文件也删)."""
+        from pathlib import Path as _P
+
+        from dddb.db import Store as _Store
+
+        from .photos import remove_photo
+
+        key = str(key or "").strip().rstrip("/")
+        url = text_field(values, "url").strip()
+        if not key or not url or self.db_path is None:
+            return self._plain_404()
+        if not self.can_edit(state):
+            return self._html(self.forbidden(state, "只有编辑者才能删除照片。"),
+                              status=403, cookies=cookies)
+        removed = ""
+        store = _Store(self.db_path)
+        try:
+            row = store.query_one(
+                "SELECT payload FROM albums WHERE key = ?", (key,))
+            if row is None:
+                return self._plain_404()
+            new_payload, removed = remove_photo(row["payload"], url)
+            store.execute("UPDATE albums SET payload = ? WHERE key = ?",
+                          (json.dumps(new_payload, ensure_ascii=False), key))
+        finally:
+            store.close()
+        if removed:
+            try:
+                _P(removed).unlink(missing_ok=True)
+            except OSError:
+                pass
+        try:
+            self.data.invalidate()
+        except Exception:                     # noqa: BLE001
+            pass
+        return self._json({"ok": True})
+
+    def _do_album_photo_note(self, key: str, state: auth.AuthState,
+                             values: Mapping[str, Any],
+                             cookies: list[str]) -> Response:
+        """改某张附图的备注."""
+        from dddb.db import Store as _Store
+
+        from .photos import set_photo_note
+
+        key = str(key or "").strip().rstrip("/")
+        url = text_field(values, "url").strip()
+        note = text_field(values, "note")
+        if not key or not url or self.db_path is None:
+            return self._plain_404()
+        if not self.can_edit(state):
+            return self._html(self.forbidden(state, "只有编辑者才能改备注。"),
+                              status=403, cookies=cookies)
+        hit = False
+        store = _Store(self.db_path)
+        try:
+            row = store.query_one(
+                "SELECT payload FROM albums WHERE key = ?", (key,))
+            if row is None:
+                return self._plain_404()
+            new_payload, hit = set_photo_note(row["payload"], url, note)
+            if hit:
+                store.execute("UPDATE albums SET payload = ? WHERE key = ?",
+                              (json.dumps(new_payload, ensure_ascii=False),
+                               key))
+        finally:
+            store.close()
+        try:
+            self.data.invalidate()
+        except Exception:                     # noqa: BLE001
+            pass
+        return self._json({"ok": bool(hit)})
 
     def _do_album_cover(self, key: str, state: auth.AuthState, body: bytes,
                         headers: Mapping[str, Any], cookies: list[str],
