@@ -280,7 +280,9 @@
     var form = document.getElementById("cover-form");
     var fileInput = document.getElementById("cover-input");
     var slots = document.querySelector("[data-cover-slots]");
-    var thumbImg = document.querySelector(".edit-cover-img[data-zoom-src]");
+    // 不能只找 [data-zoom-src]: "无封面"时左侧是 <div class="is-empty">,
+    // 没有该属性 -> thumbImg 为 null -> 上传后左侧永远不更新。
+    var thumbImg = document.querySelector(".edit-cover-img");
     if (!form || !fileInput) { return; }
 
     // ---- 灯箱放大 ----
@@ -332,8 +334,35 @@
 
     function setPrimary(src) {
       if (!thumbImg || !src) { return; }
+      // "无封面"时 thumbImg 是 <div class="edit-cover-img is-empty">,
+      // 直接设 .src 无效 —— 换成真的 <img>。
+      if (thumbImg.tagName !== "IMG") {
+        var img = document.createElement("img");
+        img.className = "edit-cover-img";
+        img.alt = "封面";
+        img.loading = "lazy";
+        thumbImg.parentNode.replaceChild(img, thumbImg);
+        thumbImg = img;
+      } else {
+        thumbImg.classList.remove("is-empty");
+        thumbImg.textContent = "";
+      }
       thumbImg.setAttribute("data-zoom-src", src);
       thumbImg.src = src;
+      // 补一个"放大"按钮(占位态时页面上没有)
+      var thumbWrap = thumbImg.parentNode;
+      if (thumbWrap && !thumbWrap.querySelector("[data-cover-zoom]")) {
+        var zoom = document.createElement("button");
+        zoom.type = "button";
+        zoom.className = "edit-cover-zoom";
+        zoom.setAttribute("data-cover-zoom", "1");
+        zoom.textContent = "放大";
+        zoom.addEventListener("click", function (e) {
+          e.preventDefault();
+          openLightbox(thumbImg.getAttribute("data-zoom-src"));
+        });
+        thumbWrap.appendChild(zoom);
+      }
       Array.prototype.forEach.call(
         slots.querySelectorAll(".cover-slot[data-src]"), function (one) {
           one.classList.toggle("is-primary",
@@ -420,6 +449,9 @@
         }
         var body = new FormData();
         body.append("csrf_token", token);
+        // 带上 next: 服务端上传成功后 303 回编辑页(否则跳详情页)
+        var _next = form.getAttribute("data-cover-next") || "";
+        if (_next) { body.append("next", _next); }
         body.append("cover", file);
         if (status) {
           status.textContent = "上传中 " + (index + 1) + "/" + total +
@@ -1513,26 +1545,46 @@
      主表单的保存不会带上封面文件。
      ========================================================================== */
   function setupCoverUpload() {
+    /* 「上传封面」按钮 = **打开文件选择**.
+
+       真正的上传由 setupCoverGallery 负责(选完图立刻自动上传)。
+       以前这里也读 input.files 再 POST 一次, 但两个函数绑同一个
+       #cover-input, gallery 传完会把 input 清空 -> 这里读到空 ->
+       报"请先选择一张图片"(用户截图)。
+
+       所以这里只做一件事: 点按钮 -> 触发选图。若页面没有 gallery
+       (创建专辑那种单图场景), 才退回"读 input 直接上传"的老逻辑。
+    */
     var wrap = document.getElementById("cover-form");
     var input = document.getElementById("cover-input");
     var hint = document.getElementById("cover-picked");
     var button = wrap ? wrap.querySelector("[data-cover-upload]") : null;
     if (!wrap || !input || !button) { return; }
 
+    var hasGallery = !!document.querySelector("[data-cover-slots]");
+
     input.addEventListener("change", function () {
       var file = input.files && input.files[0];
       if (hint) {
         hint.textContent = file
-          ? "已选择: " + file.name + " (" + Math.round(file.size / 1024) + " KB)"
+          ? "已选择: " + file.name + " (" + Math.round(file.size / 1024) +
+            " KB)"
           : "";
       }
     });
 
     button.addEventListener("click", function (e) {
       e.preventDefault();
+      // 有多图槽位: 上传交给 gallery, 这里只负责打开选择框
+      if (hasGallery) {
+        input.click();
+        return;
+      }
+      // 单图场景: 退回直接上传
       var file = input.files && input.files[0];
       if (!file) {
         if (hint) { hint.textContent = "请先选择一张图片"; }
+        input.click();
         return;
       }
       if (file.size > 2 * 1024 * 1024) {
@@ -1554,27 +1606,22 @@
       button.textContent = "上传中…";
       if (hint) { hint.textContent = "正在上传…"; }
 
-      // **不用 redirect:"manual"**: 同源重定向没有 CORS 问题, 让浏览器
-      // 正常跟随即可。manual 模式下各浏览器表现不一(opaqueredirect /
-      // status 0 / 空 body), 容易误判成失败。
       fetch(action, {
         method: "POST",
         body: body,
         credentials: "same-origin"
       }).then(function (resp) {
         if (resp.ok) {
-          // 成功: 带上时间戳强制拿最新 HTML, 避免用缓存的旧编辑页
           var target = next || window.location.pathname;
           var sep = target.indexOf("?") >= 0 ? "&" : "?";
           window.location.href = target + sep + "t=" + Date.now();
           return;
         }
-        // 失败: 把服务端给的原因显示出来
         return resp.text().then(function (text) {
           var msg = "HTTP " + resp.status;
-          var m = text && text.match(
+          var mm = text && text.match(
             /<p class="empty-title">[^<]*<\/p>\s*<p>([^<]*)<\/p>/);
-          if (m && m[1]) { msg = m[1]; }
+          if (mm && mm[1]) { msg = mm[1]; }
           throw new Error(msg);
         });
       }).catch(function (err) {
@@ -1586,13 +1633,6 @@
   }
 
 
-
-  /* ==========================================================================
-     曲目表: 按碟分组(参考网易云的唱片编辑界面)
-     * 每碟独立增删曲目; 「添加光盘」新建一碟
-     * 每行可按住把手拖动排序; 提交时按 DOM 顺序重排音轨号
-     * 不用内联 onclick(CSP script-src 'self'), 全部事件委托
-     ========================================================================== */
   function trackCell(name, label, value, placeholder, cls) {
     var td = document.createElement("td");
     if (cls) { td.className = cls; }
