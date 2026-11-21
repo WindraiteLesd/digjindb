@@ -333,7 +333,13 @@
     }
 
     function setPrimary(src) {
-      if (!thumbImg || !src) { return; }
+      if (!src) { return; }
+      // thumbImg 可能在初始化时还不存在, 或被替换后引用失效 ——
+      // 这里重新查一次, 不然上传成功后主图永远不更新。
+      if (!thumbImg || !thumbImg.parentNode) {
+        thumbImg = document.querySelector(".edit-cover-img");
+      }
+      if (!thumbImg) { return; }
       // "无封面"时 thumbImg 是 <div class="edit-cover-img is-empty">,
       // 直接设 .src 无效 —— 换成真的 <img>。
       if (thumbImg.tagName !== "IMG") {
@@ -465,12 +471,19 @@
           if (!resp.ok) { throw new Error("HTTP " + resp.status); }
           return resp.text();
         }).then(function () {
-          // 服务端写到 covers/<key>.img, 加时间戳强制刷新
-          resolve("/cover/" + encodeURIComponent(
-            (form.getAttribute("data-cover-next") || "")
-              .split("/album/")[1]
-              ?.replace("/edit", "") || "") +
-            "?v=" + Date.now());
+          // 封面地址由服务端给(data-cover-src), 这里**不再反推** ——
+          // 以前从 data-cover-next 拼, 格式一变就得到 /cover/?v=... 图裂,
+          // 看起来像"上传了但没显示"。
+          var base = form.getAttribute("data-cover-src") || "";
+          if (!base) {
+            // 兜底: 从 next 里取 /album/<key>/edit 的 key
+            var m = (form.getAttribute("data-cover-next") || "")
+              .match(/\/album\/(.+?)\/edit/);
+            base = m ? "/cover/" + m[1] : "";
+          }
+          if (!base) { resolve(null); return; }
+          resolve(base + (base.indexOf("?") >= 0 ? "&" : "?") +
+                  "v=" + Date.now());
         }).catch(function () { resolve(null); });
       });
     }
@@ -486,7 +499,12 @@
         chain = chain.then(function () {
           return uploadOne(file, i, files.length).then(function (src) {
             if (src) {
-              addSlot(src, file.name, i === 0 && !thumbImg.getAttribute("data-zoom-src"));
+              // thumbImg 可能是 null(初始化时页面上没有 .edit-cover-img),
+              // 直接 .getAttribute 会抛异常 —— 而异常发生在 addSlot
+              // **已经加完槽位之后**, 于是"槽位有了、主图没变"。
+              var hasPrimary = !!(thumbImg &&
+                                  thumbImg.getAttribute("data-zoom-src"));
+              addSlot(src, file.name, i === 0 && !hasPrimary);
             }
           });
         });
@@ -497,6 +515,20 @@
                                " 张（点缩略图设为封面，× 可删除）";
         }
         fileInput.value = "";
+        // **确定性兜底**: 数据已经写进库了, 只要主图没更新就直接刷新。
+        // 不依赖 setPrimary 的任何前端状态 —— 刷新后服务端一定渲染新图。
+        window.setTimeout(function () {
+          var main = document.querySelector(".edit-cover-img");
+          var ok = main && main.tagName === "IMG" &&
+                   main.getAttribute("src") &&
+                   !main.classList.contains("is-empty");
+          if (!ok) {
+            var next = form.getAttribute("data-cover-next") ||
+                       window.location.pathname;
+            var sep = next.indexOf("?") >= 0 ? "&" : "?";
+            window.location.href = next + sep + "t=" + Date.now();
+          }
+        }, 400);
       });
     });
 
