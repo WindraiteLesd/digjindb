@@ -104,9 +104,14 @@
     modal.appendChild(panel);
     document.body.appendChild(modal);
 
-    // 拖动 / 缩放
+    // 整框拖动(点框内非角区域)
     frame.addEventListener("mousedown", startDrag);
     frame.addEventListener("touchstart", startDrag, {passive: false});
+    // **四角拖动缩放**: 之前只设了 data-dir, 没绑事件, 所以框是死的
+    frame.querySelectorAll(".crop-handle").forEach(function (h) {
+      h.addEventListener("mousedown", startResize);
+      h.addEventListener("touchstart", startResize, {passive: false});
+    });
     img.addEventListener("mousedown", startDrag);
     img.addEventListener("touchstart", startDrag, {passive: false});
     zoomIn.addEventListener("click", function () { setScale(state.scale * 1.15); });
@@ -258,9 +263,95 @@
     applyTransform();
   }
 
+  /* ---- 四角拖动: 自由调整裁切范围 ---- */
+  var MIN_BOX = 40;          // 最小边长, 免得拖成一条线
+
+  function startResize(e) {
+    if (!state.img || !modal) { return; }
+    var dir = e.target && e.target.getAttribute
+      ? e.target.getAttribute("data-dir") : "";
+    if (!dir) { return; }
+    e.preventDefault();
+    e.stopPropagation();
+    var pt = e.touches ? e.touches[0] : e;
+    state.resizing = {
+      dir: dir, x: pt.clientX, y: pt.clientY,
+      box: {x: state.box.x, y: state.box.y,
+            w: state.box.w, h: state.box.h}
+    };
+    window.addEventListener("mousemove", doResize);
+    window.addEventListener("mouseup", endResize);
+    window.addEventListener("touchmove", doResize, {passive: false});
+    window.addEventListener("touchend", endResize);
+  }
+
+  function doResize(e) {
+    if (!state.resizing) { return; }
+    e.preventDefault();
+    var pt = e.touches ? e.touches[0] : e;
+    var dx = pt.clientX - state.resizing.x;
+    var dy = pt.clientY - state.resizing.y;
+    var b = state.resizing.box;
+    var dir = state.resizing.dir;
+
+    var x = b.x, y = b.y, w = b.w, h = b.h;
+    if (dir.indexOf("w") >= 0) {         // 左边
+      x = b.x + dx; w = b.w - dx;
+    }
+    if (dir.indexOf("e") >= 0) {         // 右边
+      w = b.w + dx;
+    }
+    if (dir.indexOf("n") >= 0) {         // 上边
+      y = b.y + dy; h = b.h - dy;
+    }
+    if (dir.indexOf("s") >= 0) {         // 下边
+      h = b.h + dy;
+    }
+
+    // 最小尺寸: 拖过头就卡住, 而不是翻转
+    if (w < MIN_BOX) {
+      if (dir.indexOf("w") >= 0) { x = b.x + (b.w - MIN_BOX); }
+      w = MIN_BOX;
+    }
+    if (h < MIN_BOX) {
+      if (dir.indexOf("n") >= 0) { y = b.y + (b.h - MIN_BOX); }
+      h = MIN_BOX;
+    }
+
+    // 不超出舞台
+    var refs = modal._refs;
+    var sw = refs.stage.clientWidth;
+    var sh = refs.stage.clientHeight;
+    if (x < 0) { w += x; x = 0; }
+    if (y < 0) { h += y; y = 0; }
+    if (x + w > sw) { w = sw - x; }
+    if (y + h > sh) { h = sh - y; }
+    if (w < MIN_BOX) { w = MIN_BOX; }
+    if (h < MIN_BOX) { h = MIN_BOX; }
+
+    state.box = {x: Math.round(x), y: Math.round(y),
+                 w: Math.round(w), h: Math.round(h)};
+    paintFrame();
+    // 框变了, 图片的可拖范围也要重算
+    applyTransform();
+  }
+
+  function endResize() {
+    state.resizing = null;
+    window.removeEventListener("mousemove", doResize);
+    window.removeEventListener("mouseup", endResize);
+    window.removeEventListener("touchmove", doResize);
+    window.removeEventListener("touchend", endResize);
+  }
+
   /* ---- 拖动 ---- */
   function startDrag(e) {
     if (!state.img) { return; }
+    // 点在角上 = 缩放, 不要同时触发整框拖动
+    if (e.target && e.target.closest &&
+        e.target.closest(".crop-handle")) {
+      return;
+    }
     var pt = e.touches ? e.touches[0] : e;
     state.dragging = {
       x: pt.clientX, y: pt.clientY,

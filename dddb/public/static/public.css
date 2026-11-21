@@ -3178,10 +3178,18 @@ body.crop-open { overflow: hidden; }
   box-shadow: 0 0 0 9999px rgba(0, 0, 0, .5);
   pointer-events: auto; cursor: move;
 }
+/* 四角拖动把手: 要能点击, 且给对应方向的光标 */
 .crop-handle {
-  position: absolute; width: 12px; height: 12px;
-  background: var(--accent, #c9a86a); border-radius: 2px;
+  position: absolute; width: 14px; height: 14px;
+  background: var(--accent, #c9a86a); border-radius: 3px;
+  pointer-events: auto; touch-action: none; z-index: 3;
+  /* 扩大命中区: 视觉 14px, 实际可点 22px */
+  box-shadow: 0 0 0 4px rgba(0, 0, 0, 0);
 }
+.crop-nw { left: -5px; top: -5px; cursor: nwse-resize; }
+.crop-ne { right: -5px; top: -5px; cursor: nesw-resize; }
+.crop-sw { left: -5px; bottom: -5px; cursor: nesw-resize; }
+.crop-se { right: -5px; bottom: -5px; cursor: nwse-resize; }
 .crop-nw { left: -6px; top: -6px; }
 .crop-ne { right: -6px; top: -6px; }
 .crop-sw { left: -6px; bottom: -6px; }
