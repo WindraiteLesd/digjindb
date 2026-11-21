@@ -226,6 +226,23 @@ AVATAR_MAX_BYTES = 512 * 1024
 PROFILES_DB_FILENAME = "public_profiles.sqlite3"
 
 
+def _cover_stem(key: Any) -> str:
+    """专辑 key -> 封面文件名主干(**稳定且唯一**).
+
+    不能用"把非字母数字替换成 -"那种 slug: 库里绝大多数专辑名是
+    中日文, 那样会得到 ``"--"``, 于是**所有中文专辑共用一个封面文件**,
+    后传的覆盖先传的(用户实测: 上传后显示的是别的碟的封面)。
+
+    改用 key 的 SHA1 前 16 位: 纯 ASCII、天然唯一、不随系统 locale 变。
+    """
+    import hashlib
+
+    text = str(key or "")
+    if not text:
+        return "cover"
+    return hashlib.sha1(text.encode("utf-8")).hexdigest()[:16]
+
+
 def _env_flag(name: str, default: bool = True) -> bool:
     """读布尔型环境变量(``0/false/no/off`` 视为关)."""
     raw = os.environ.get(name)
@@ -2976,7 +2993,7 @@ class PublicSite:
         if len(blob) > 2 * 1024 * 1024:
             logger.warning("新建专辑 %s: 封面超过 2MB, 已跳过", key)
             return False
-        stem = re.sub(r"[^A-Za-z0-9._-]+", "-", str(key))[:120] or "cover"
+        stem = _cover_stem(key)
         target = Path(covers_dir) / f"{stem}.img"
         try:
             Path(covers_dir).mkdir(parents=True, exist_ok=True)
@@ -3043,7 +3060,7 @@ class PublicSite:
                               status=400, cookies=cookies)
         # 写到**标准缓存路径** ``covers/<key>.img``: 封面服务本来就认这个位置,
         # 这样即使专辑原有的 cover_local 指向失效路径也能立刻显示新封面。
-        stem = re.sub(r"[^A-Za-z0-9._-]+", "-", str(key))[:120] or "cover"
+        stem = _cover_stem(key)
         (Path(covers_dir) / "upload").mkdir(parents=True, exist_ok=True)
         target = Path(covers_dir) / f"{stem}.img"
         try:
