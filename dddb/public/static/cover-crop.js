@@ -18,6 +18,8 @@
   var modal = null;          // 裁切弹窗
   var state = {
     kind: "cover",           // cover | photo
+    square: true,            // 默认 1:1 方形(用户要求)
+    keepScale: false,        // false = 打开时重置为 contain 基准
     form: null,
     file: null,
     img: null,
@@ -28,6 +30,10 @@
     dragging: null,
     note: ""
   };
+
+  //: 裁切框最小边长(免得拖成一条线). **模块级** ——
+  //: layout / enforceSquare / clampBoxToImage 都要用, 放函数里会 undefined。
+  var MIN_BOX = 40;
 
   /* ---- 工具 ---- */
   function $(s, root) { return (root || document).querySelector(s); }
@@ -134,6 +140,8 @@
     state.file = file;
     state.scale = 1;
     state.offset = {x: 0, y: 0};
+    state.keepScale = false;      // 每次打开都重新按 contain 算
+    state.square = true;          // 默认方形
     state.note = "";
 
     var refs = modal._refs;
@@ -207,16 +215,32 @@
       return;
     }
 
-    // 最小缩放 = 让图完全盖住裁切框(这里用 stage 的 80%)
-    var boxW = Math.round(sw * 0.8);
-    var boxH = Math.round(sh * 0.8);
+    // ---- 先决定图片的显示尺寸 ----
+    // "初始范围就覆盖整张图片": 让图 **contain** 到 stage(完整可见),
+    // 然后把方形框取成图片区域的**最大内接正方形**。
+    var fitScale = Math.min(sw / iw, sh / ih);
+    state.minScale = fitScale;
+    state.baseScale = fitScale;          // contain 基准, 初始用
+    if (!state.keepScale) {
+      state.scale = fitScale;
+    }
+
+    var dispW = iw * state.scale;
+    var dispH = ih * state.scale;
+    var imgLeft = (sw - dispW) / 2 + state.offset.x;
+    var imgTop = (sh - dispH) / 2 + state.offset.y;
+
+    // ---- 默认 1:1 方形框 ----
+    // 取图片显示区域的**短边**(即最大内接正方形), 再留一点边距。
+    var side = Math.min(dispW, dispH);
+    side = Math.round(side * 0.92);
+    side = Math.max(MIN_BOX, Math.min(side, Math.min(sw, sh) - 8));
     state.box = {
-      x: Math.round((sw - boxW) / 2),
-      y: Math.round((sh - boxH) / 2),
-      w: boxW, h: boxH
+      x: Math.round(imgLeft + (dispW - side) / 2),
+      y: Math.round(imgTop + (dispH - side) / 2),
+      w: side, h: side
     };
-    state.minScale = Math.max(boxW / iw, boxH / ih);
-    if (state.scale < state.minScale) { state.scale = state.minScale; }
+    clampBoxToImage();
     applyTransform();
     paintFrame();
   }
@@ -263,8 +287,82 @@
     applyTransform();
   }
 
+  /* ---- 1:1 方形约束(默认开) ----
+     用户: "默认该是一个封面标准的方形框，比例默认为 1:1"
+     拖角时按**较大的那个方向**取边长, 保持正方形。
+  */
+  function enforceSquare(origin) {
+    var b = state.box;
+    var side = Math.max(b.w, b.h);
+    side = Math.max(MIN_BOX, side);
+    var cx = b.x + b.w / 2;
+    var cy = b.y + b.h / 2;
+    state.box = {
+      x: Math.round(cx - side / 2),
+      y: Math.round(cy - side / 2),
+      w: Math.round(side), h: Math.round(side)
+    };
+  }
+
+  /* ---- 把裁切框夹进图片可视区域 (不能拖到空白处) ---- */
+  function imageRect() {
+    // 图片在 stage 上的矩形(考虑缩放与当前的平移)
+    var refs = modal._refs;
+    var sw = refs.stage.clientWidth;
+    var sh = refs.stage.clientHeight;
+    var iw = (state.img && state.img.naturalWidth) || 0;
+    var ih = (state.img && state.img.naturalHeight) || 0;
+    if (!iw || !ih) { return null; }
+    var w = iw * state.scale;
+    var h = ih * state.scale;
+    return {
+      left: (sw - w) / 2 + state.offset.x,
+      top: (sh - h) / 2 + state.offset.y,
+      right: (sw - w) / 2 + state.offset.x + w,
+      bottom: (sh - h) / 2 + state.offset.y + h
+    };
+  }
+
+  function clampBoxToImage() {
+    var r = imageRect();
+    if (!r) { return; }
+    var b = state.box;
+    // 框不能超出图片矩形
+    var minX = Math.max(0, r.left);
+    var minY = Math.max(0, r.top);
+    var maxX = Math.min(modal._refs.stage.clientWidth, r.right);
+    var maxY = Math.min(modal._refs.stage.clientHeight, r.bottom);
+    if (maxX - minX < MIN_BOX || maxY - minY < MIN_BOX) {
+      // 图片太小, 直接贴合图片
+      state.box = {
+        x: Math.round(r.left), y: Math.round(r.top),
+        w: Math.max(MIN_BOX, Math.round(r.right - r.left)),
+        h: Math.max(MIN_BOX, Math.round(r.bottom - r.top))
+      };
+      return;
+    }
+    var x = Math.min(Math.max(b.x, minX), maxX - MIN_BOX);
+    var y = Math.min(Math.max(b.y, minY), maxY - MIN_BOX);
+    var w = Math.min(b.w, maxX - x);
+    var h = Math.min(b.h, maxY - y);
+    if (w < MIN_BOX) { w = MIN_BOX; x = Math.max(minX, maxX - MIN_BOX); }
+    if (h < MIN_BOX) { h = MIN_BOX; y = Math.max(minY, maxY - MIN_BOX); }
+    state.box = {
+      x: Math.round(x), y: Math.round(y),
+      w: Math.round(w), h: Math.round(h)
+    };
+    // 方形模式下, 夹取可能把框压变形 -> 再压回正方形(取**较小**边, 保证仍在图内)
+    if (state.square) {
+      var s = Math.min(state.box.w, state.box.h);
+      s = Math.max(MIN_BOX, s);
+      var nx = Math.min(Math.max(state.box.x, minX), maxX - s);
+      var ny = Math.min(Math.max(state.box.y, minY), maxY - s);
+      state.box = {x: Math.round(nx), y: Math.round(ny),
+                   w: Math.round(s), h: Math.round(s)};
+    }
+  }
+
   /* ---- 四角拖动: 自由调整裁切范围 ---- */
-  var MIN_BOX = 40;          // 最小边长, 免得拖成一条线
 
   function startResize(e) {
     if (!state.img || !modal) { return; }
@@ -331,6 +429,9 @@
 
     state.box = {x: Math.round(x), y: Math.round(y),
                  w: Math.round(w), h: Math.round(h)};
+    if (state.square) { enforceSquare("resize"); }
+    // **夹进图片内**: 不能拖到空白处
+    clampBoxToImage();
     paintFrame();
     // 框变了, 图片的可拖范围也要重算
     applyTransform();
@@ -370,6 +471,9 @@
     state.offset.x = state.dragging.ox + (pt.clientX - state.dragging.x);
     state.offset.y = state.dragging.oy + (pt.clientY - state.dragging.y);
     applyTransform();
+    // 图移动了, 框也要跟着夹回图片内
+    clampBoxToImage();
+    paintFrame();
     e.preventDefault();
   }
 
