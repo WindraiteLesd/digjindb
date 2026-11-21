@@ -1376,10 +1376,18 @@ body::before {
   max-width: 300px;
 }
 
+/* 原生 file input **隐藏**: 只作为 pick() 的落点.
+   露出来就会和「上传封面」按钮重复(用户截图里就是两个按钮)。 */
 .edit-cover-row .cover-file {
-  width: 100%;
-  font-size: 12px;
-  color: var(--text-dim);
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 .edit-cover-row .cover-file::file-selector-button {

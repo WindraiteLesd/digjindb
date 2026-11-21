@@ -137,11 +137,31 @@
     modal.classList.add("on");
     document.body.classList.add("crop-open");
 
+    // 先清掉上一次的尺寸, 避免残留 0 宽高
+    refs.img.style.width = "";
+    refs.img.style.height = "";
+    refs.img.style.left = "";
+    refs.img.style.top = "";
+    state.img = null;
+
     var url = URL.createObjectURL(file);
     refs.img.onload = function () {
       state.img = refs.img;
-      layout();
-      URL.revokeObjectURL(url);
+      // **必须等 naturalWidth 有值**再算布局, 否则会算出 0 宽高 -> 图看不见
+      var tries = 0;
+      (function waitSize() {
+        if (refs.img.naturalWidth > 0 && refs.img.naturalHeight > 0) {
+          layout();
+          return;
+        }
+        if (tries++ < 30) { setTimeout(waitSize, 30); }
+      })();
+      // 图已经在内存里了, 这里 revoke 不会影响显示
+      setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+    };
+    refs.img.onerror = function () {
+      alert("图片读取失败，请换一张试试");
+      closeModal();
     };
     refs.img.src = url;
   }
@@ -161,8 +181,17 @@
     var stage = refs.stage;
     var sw = stage.clientWidth;
     var sh = stage.clientHeight;
-    var iw = state.img.naturalWidth || 1;
-    var ih = state.img.naturalHeight || 1;
+    if (!sw || !sh) {
+      setTimeout(layout, 40);
+      return;
+    }
+    var iw = state.img.naturalWidth || 0;
+    var ih = state.img.naturalHeight || 0;
+    if (!iw || !ih) {
+      // 图还没解码完 -> 稍后再来, 别用 1 当尺寸算出 0 宽的图
+      setTimeout(layout, 40);
+      return;
+    }
 
     // 最小缩放 = 让图完全盖住裁切框(这里用 stage 的 80%)
     var boxW = Math.round(sw * 0.8);
@@ -183,8 +212,11 @@
     var img = refs.img;
     var sw = refs.stage.clientWidth;
     var sh = refs.stage.clientHeight;
-    var w = (img.naturalWidth || 1) * state.scale;
-    var h = (img.naturalHeight || 1) * state.scale;
+    var iw = img.naturalWidth || 0;
+    var ih = img.naturalHeight || 0;
+    if (!iw || !ih) { return; }     // 图还没解码完, 等 layout 重试
+    var w = iw * state.scale;
+    var h = ih * state.scale;
 
     // 不让图离开裁切框: 限制偏移
     var maxX = Math.max(0, (w - state.box.w) / 2);
