@@ -3127,3 +3127,9 @@ tr.track-item.is-open .track-toggle { transform: rotate(90deg); }
   margin-right: 3px;
   line-height: 1;
 }
+/* 词条行的「原名 / 别名」是可选项: 窄一点, 不抢职位与人员的宽度 */
+.credit-row .credit-extra { flex: 0 1 110px; min-width: 88px; }
+.credit-row .credit-extra input { font-size: 12.5px; }
+@media (max-width: 820px) {
+  .credit-row .credit-extra { flex: 1 1 100%; }
+}

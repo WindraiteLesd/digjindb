@@ -843,13 +843,31 @@ def parse_album_form(
     names = many_fields(values, "credit_name")
     if max(len(roles), len(names)) > MAX_ROWS:
         errors["credits"] = f"词条最多 {MAX_ROWS} 行"
+    # 可选的「原名」「别名」列(歌词解析导入时会用到, 手填可留空)
+    originals = many_fields(values, "credit_original")
+    aliases = many_fields(values, "credit_alias")
+    raw_roles = many_fields(values, "credit_raw_role")
+
+    def _opt(seq: list[str], pos: int) -> str:
+        return str(seq[pos]).strip() if pos < len(seq) else ""
+
     for position in range(min(MAX_ROWS, max(len(roles), len(names)))):
         role = roles[position] if position < len(roles) else ""
         name = names[position] if position < len(names) else ""
         if not name:
             continue  # 空行忽略(表单里有几行留白是正常的)
+        original = _opt(originals, position)
+        alias = _opt(aliases, position)
+        raw_role = _opt(raw_roles, position)
         for one in split_list(name):
-            credits.append({"role": role or "artist", "name": one})
+            item: dict[str, Any] = {"role": role or "artist", "name": one}
+            if original:
+                item["original"] = original
+            if alias:
+                item["alias"] = alias
+            if raw_role and raw_role != role:
+                item["raw_role"] = raw_role
+            credits.append(item)
 
     # 外链: url_key[i] 配 url_value[i]
     urls: dict[str, str] = {}

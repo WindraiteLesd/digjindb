@@ -96,18 +96,44 @@ class Track:
 
 @dataclass(slots=True)
 class Credit:
-    """社团 / 艺人 / 制作人员."""
+    """社团 / 艺人 / 制作人员.
+
+    ``original`` / ``alias`` / ``raw_role`` 是**可选**的补充信息,
+    主要来自歌词解析(见 :mod:`dddb.lyrics_credits`):
+
+        name      中文名        许笑男
+        original  原名/罗马字    Xuanan Xu
+        alias     括号里的别名   (HOYO-MIX)
+        raw_role  歌词原文职位   钢琴 Piano
+
+    旧记录没有这些键, 读出来是空串; ``to_dict()`` 也不输出空值,
+    所以库里的 JSON 不会因这次改动变大。
+    """
 
     name: str = ""
     role: str = "artist"  # circle | artist | vocal | arrange | lyric | compose | illustrator | ...
     source: str = ""
+    original: str = ""
+    alias: str = ""
+    raw_role: str = ""
 
     def __post_init__(self) -> None:
         self.name = _clean_str(self.name)
         self.role = _clean_str(self.role) or "artist"
+        self.original = _clean_str(self.original)
+        self.alias = _clean_str(self.alias)
+        self.raw_role = _clean_str(self.raw_role)
 
     def to_dict(self) -> dict[str, Any]:
-        return {"name": self.name, "role": self.role, "source": self.source}
+        out: dict[str, Any] = {
+            "name": self.name, "role": self.role, "source": self.source,
+        }
+        # 只输出有值的可选字段 —— 让旧数据保持原样
+        for key in ("original", "alias", "raw_role"):
+            val = getattr(self, key, "")
+            if val:
+                out[key] = val
+        return out
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "Credit":
@@ -115,6 +141,9 @@ class Credit:
             name=_clean_str(data.get("name")),
             role=_clean_str(data.get("role")) or "artist",
             source=_clean_str(data.get("source")),
+            original=_clean_str(data.get("original")),
+            alias=_clean_str(data.get("alias")),
+            raw_role=_clean_str(data.get("raw_role")),
         )
 
 
