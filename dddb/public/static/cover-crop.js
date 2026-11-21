@@ -144,7 +144,9 @@
     refs.img.style.top = "";
     state.img = null;
 
-    var url = URL.createObjectURL(file);
+    // **不用 createObjectURL**: CSP 的 img-src 未必允许 blob:,
+    // 被拦时 img.onerror 立刻触发 -> "图片读取失败"。改用 FileReader
+    // 产出 data: URL(img-src 白名单本来就有 data:)。
     refs.img.onload = function () {
       state.img = refs.img;
       // **必须等 naturalWidth 有值**再算布局, 否则会算出 0 宽高 -> 图看不见
@@ -156,14 +158,21 @@
         }
         if (tries++ < 30) { setTimeout(waitSize, 30); }
       })();
-      // 图已经在内存里了, 这里 revoke 不会影响显示
-      setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
     };
     refs.img.onerror = function () {
       alert("图片读取失败，请换一张试试");
       closeModal();
     };
-    refs.img.src = url;
+
+    var reader = new FileReader();
+    reader.onload = function () {
+      refs.img.src = String(reader.result || "");
+    };
+    reader.onerror = function () {
+      alert("图片读取失败，请换一张试试");
+      closeModal();
+    };
+    reader.readAsDataURL(file);
   }
 
   function closeModal() {
@@ -398,33 +407,29 @@
         pick("cover");
       });
     }
-    // ③ 左侧大图 / 加号 -> 也是封面
+    // ③ **大加号 = 添加照片**(用户要求: 其他照片的添加途径就是大加号)
     var addBtn = document.querySelector("[data-cover-add]");
     if (addBtn) {
       addBtn.addEventListener("click", function (e) {
         e.preventDefault();
         e.stopPropagation();
-        pick("cover");
-      });
-    }
-    // ③b 左侧大图本身(点图片也打开选图)
-    var thumbWrap = document.querySelector(".edit-cover-thumb");
-    if (thumbWrap) {
-      thumbWrap.style.cursor = "pointer";
-      thumbWrap.addEventListener("click", function (e) {
-        if (e.target.closest && e.target.closest(".cover-slot")) { return; }
-        e.preventDefault();
-        pick("cover");
-      });
-    }
-    // ④ 右侧「添加其他照片」
-    var photoAdd = document.querySelector("[data-photo-add]");
-    if (photoAdd) {
-      photoAdd.addEventListener("click", function (e) {
-        e.preventDefault();
         pick("photo");
       });
     }
+    // ③b 左侧大图 = 换封面(点当前封面图)
+    var thumbWrap = document.querySelector(".edit-cover-thumb");
+    if (thumbWrap) {
+      thumbWrap.style.cursor = "pointer";
+      thumbWrap.title = "点击更换封面";
+      thumbWrap.addEventListener("click", function (e) {
+        if (e.target.closest && e.target.closest("[data-cover-add]")) {
+          return;
+        }
+        e.preventDefault();
+        pick("cover");
+      });
+    }
+
     // 附图上的删除 / 改备注
     document.querySelectorAll("[data-photo-del]").forEach(function (b) {
       b.addEventListener("click", function () {

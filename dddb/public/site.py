@@ -137,7 +137,10 @@ _MEMBER_WRITE_ROUTES = frozenset({
 #: 页面响应头: 公开端只有一份同源脚本(``script-src 'self'``), 没有内联脚本;
 #: 封面/头像是图片, 允许 https 与 data:; 内联 style 仅用于数据条宽度。
 _CSP = (
-    "default-src 'none'; img-src 'self' https: data:; style-src 'self' 'unsafe-inline';"
+    # img-src 要允许 ``blob:`` —— 裁切弹窗用 createObjectURL 做本地预览.
+    # 只给 data: 会让 blob 预览被拦(用户实测: "图片读取失败")。
+    "default-src 'none'; img-src 'self' https: data: blob:;"
+    " style-src 'self' 'unsafe-inline';"
     " script-src 'self'; font-src 'self'; form-action 'self'; base-uri 'none';"
     # frame-src: 详情页的 SoundCloud / YouTube 播放器走**本站** /embed/<key>/<n> 中转,
     # 所以只需要放行 'self'; 平台域名不进 CSP, 也不进页面 HTML(合规)。

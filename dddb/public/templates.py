@@ -550,7 +550,7 @@ def layout(
 <link rel="icon" href="/static/favicon.svg?v=2" type="image/svg+xml">
 <!-- 唯一的脚本: 同源外链, 只做渐进增强(CSP 只给 script-src 'self') -->
 <script src="/static/public.js?v=54" defer></script>
-<script src="/static/cover-crop.js?v=2" defer></script>
+<script src="/static/cover-crop.js?v=3" defer></script>
 </head>
 <body{_bg_attr(ctx)}>
 <a class="skip" href="#content">跳到正文</a>
@@ -4791,15 +4791,14 @@ def _photos_html(key: Any, ctx: SiteContext,
             '<button type="button" class="photo-del" title="删除"'
             ' aria-label="删除这张照片" data-photo-del="{}">✕</button>'
             '</figure>'.format(url, note, url, url))
+    # **只露照片网格**: 标题与「＋ 添加照片」按钮都去掉了
+    # (用户要求: 添加途径统一用左侧大加号)
+    if not cards:
+        return ""
     return (
         '<div class="photo-block" data-photo-block="1">'
-        '<div class="photo-head"><span>其他照片'
-        '<span class="field-hint">不参与封面，可加备注</span></span>'
-        '<button type="button" class="btn-ghost btn-xs"'
-        ' data-photo-add="1">＋ 添加照片</button></div>'
         '<div class="photo-grid">{}</div>'
-        '</div>'.format("".join(cards) or
-                        '<p class="field-hint">还没有照片</p>')
+        '</div>'.format("".join(cards))
     )
 
 
@@ -5121,8 +5120,7 @@ def edit_album_page(
             f'<p class="cover-picked" id="cover-picked"></p>'
             f'<button type="button" class="btn-ghost btn-xs cover-upload-btn"'
             f' data-cover-upload="1">上传封面</button>'
-            f'<p class="field-hint">PNG / JPEG / WebP，≤2MB；'
-            f'选择后先调整范围，确认才上传</p>'
+            f'<p class="field-hint">PNG / JPEG / WebP，≤2MB</p>'
             f'</div></div>'
             # **其他照片**: 不含封面, 可加备注
             + _photos_html(key, ctx, album)
