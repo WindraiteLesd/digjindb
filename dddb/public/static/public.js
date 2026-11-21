@@ -1554,20 +1554,28 @@
       button.textContent = "上传中…";
       if (hint) { hint.textContent = "正在上传…"; }
 
+      // **不用 redirect:"manual"**: 同源重定向没有 CORS 问题, 让浏览器
+      // 正常跟随即可。manual 模式下各浏览器表现不一(opaqueredirect /
+      // status 0 / 空 body), 容易误判成失败。
       fetch(action, {
         method: "POST",
         body: body,
-        credentials: "same-origin",
-        redirect: "manual"
+        credentials: "same-origin"
       }).then(function (resp) {
-        // 服务端成功会 303 回到编辑页; redirect:manual 下 status 是 0/opaqueredirect
-        if (resp.type === "opaqueredirect" || resp.status === 303 ||
-            resp.status === 200 || resp.status === 0) {
-          window.location.href = next || window.location.href;
+        if (resp.ok) {
+          // 成功: 带上时间戳强制拿最新 HTML, 避免用缓存的旧编辑页
+          var target = next || window.location.pathname;
+          var sep = target.indexOf("?") >= 0 ? "&" : "?";
+          window.location.href = target + sep + "t=" + Date.now();
           return;
         }
+        // 失败: 把服务端给的原因显示出来
         return resp.text().then(function (text) {
-          throw new Error("HTTP " + resp.status);
+          var msg = "HTTP " + resp.status;
+          var m = text && text.match(
+            /<p class="empty-title">[^<]*<\/p>\s*<p>([^<]*)<\/p>/);
+          if (m && m[1]) { msg = m[1]; }
+          throw new Error(msg);
         });
       }).catch(function (err) {
         button.disabled = false;

@@ -549,7 +549,7 @@ def layout(
 <!-- ?v=2: 图标换过, 但静态资源被 CF/浏览器缓存 1 天, 加版本号强制刷新 -->
 <link rel="icon" href="/static/favicon.svg?v=2" type="image/svg+xml">
 <!-- 唯一的脚本: 同源外链, 只做渐进增强(CSP 只给 script-src 'self') -->
-<script src="/static/public.js?v=49" defer></script>
+<script src="/static/public.js?v=50" defer></script>
 </head>
 <body{_bg_attr(ctx)}>
 <a class="skip" href="#content">跳到正文</a>
@@ -4979,6 +4979,12 @@ def edit_album_page(
                   else "")
     if album.get("cover_local") or album.get("has_cover"):
         _cover_url = esc(cover_src(key, album))
+        # 编辑页的封面预览要**每次都拉新图**: 上传后立刻刷新时,
+        # 浏览器可能拿缓存里的旧封面(响应是长缓存)。
+        _ver = str(album.get("cover_v") or "")
+        _bust = "?v={}".format(_ver) if _ver else "?t=edit"
+        if _cover_url and "?" not in _cover_url:
+            _cover_url = _cover_url + _bust
         cover_thumb_html = (
             f'<img class="edit-cover-img" loading="lazy"'
             f' src="{_cover_url}" alt="封面" data-zoom-src="{_cover_url}">'
