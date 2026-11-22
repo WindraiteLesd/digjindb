@@ -128,6 +128,7 @@
     // 词条: 成对填 credit_role / credit_name
     var roles = $$('[name="credit_role"]');
     var names = $$('[name="credit_name"]');
+    // 只填职位与人员 —— 表单里已经没有「原名 / 别名」两列了
     d.credits.forEach(function (c, i) {
       if (i < roles.length && i < names.length) {
         roles[i].value = c.role;
