@@ -149,6 +149,11 @@ _CSP = (
     #   跨域就被拦("已阻止此内容")。所以这里直接放行这三个播放器域。
     " frame-src 'self' https://www.youtube.com https://www.youtube-nocookie.com"
     " https://w.soundcloud.com;"
+    # connect-src: 前端用 fetch() 上传封面/附图/裁切结果。
+    #   default-src 'none' 会**默认拒绝**一切 fetch —— 缺这一条时
+    #   浏览器直接抛 "Failed to fetch"(用户实测: 上传失败)。
+    #   只放行本站, 因为所有上传接口都是同源的 /api 或 /<entity>/<key>/cover。
+    " connect-src 'self';"
     " frame-ancestors 'none'"
 )
 
