@@ -228,9 +228,15 @@ def build(draft: Any) -> str:
         return _value_of(d, meta, shape, name)
 
     put("key", d.get("key") or meta.get("key") or "")
-    for name in ("title_original", "title", "title_romaji", "circle",
-                 "company", "event", "release_date", "catalog_no",
-                 "price", "hall", "booth"):
+    # 先放原题, 再放译名 —— 两者相同时跳过译名, 免得 infobox 里
+    # 同一条标题写两遍(线上导出的数据里 title 常常就是 title_original)。
+    _orig = _clean(field("title_original"))
+    _disp = _clean(field("title"))
+    put("title_original", _orig)
+    if _disp and _disp != _orig:
+        put("title", _disp)
+    for name in ("title_romaji", "circle", "company", "event",
+                 "release_date", "catalog_no", "price", "hall", "booth"):
         put(name, field(name))
 
     artists_value = field("artists")
