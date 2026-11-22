@@ -3229,3 +3229,62 @@ body.crop-open { overflow: hidden; }
   background: rgba(0, 0, 0, .6); color: #fff; line-height: 1;
   font-size: 12px;
 }
+
+/* 裁切弹窗的 1:1 锁定开关 */
+.crop-square {
+  display: flex; align-items: center; gap: 7px;
+  font-size: 13px; color: var(--text-dim); cursor: pointer;
+}
+.crop-square input { width: 15px; height: 15px; cursor: pointer; }
+/* ==========================================================================
+   dddb infobox 弹窗
+   ========================================================================== */
+.infobox-bar {
+  display: flex; align-items: center; gap: 10px;
+  margin: 0 0 12px; padding-bottom: 10px;
+  border-bottom: 1px dashed var(--border-soft, #3a3430);
+}
+.infobox-modal {
+  position: fixed; inset: 0; z-index: 9000;
+  background: rgba(0, 0, 0, .6);
+  display: flex; align-items: center; justify-content: center;
+  padding: 20px;
+}
+.infobox-modal[hidden] { display: none; }
+.infobox-panel {
+  background: var(--panel, #262220);
+  border: 1px solid var(--border-soft, #3a3430);
+  border-radius: 12px; padding: 16px;
+  width: min(760px, 94vw); max-height: 90vh;
+  display: flex; flex-direction: column; gap: 10px;
+}
+.infobox-head { display: flex; align-items: center; }
+.infobox-head strong { font-size: 15px; }
+.infobox-x {
+  margin-left: auto; background: none; border: 0; cursor: pointer;
+  color: var(--text-dim); font-size: 17px; line-height: 1;
+}
+.infobox-text {
+  width: 100%; min-height: 300px; resize: vertical;
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 12.5px; line-height: 1.6;
+  background: var(--panel-2, rgba(255, 255, 255, .04));
+  color: var(--text); border: 1px solid var(--border-soft, #3a3430);
+  border-radius: 8px; padding: 10px;
+}
+.infobox-acts {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+}
+.infobox-msg {
+  font-size: 12.5px; color: var(--ok, #7fbf7f);
+  margin-left: 4px;
+}
+.infobox-acts .btn { margin-left: auto; }
+.infobox-help-panel { width: min(680px, 94vw); }
+.infobox-help-text {
+  margin: 0; padding: 12px; overflow: auto; max-height: 70vh;
+  background: var(--panel-2, rgba(255, 255, 255, .04));
+  border-radius: 8px; font-size: 12.5px; line-height: 1.7;
+  white-space: pre-wrap; word-break: break-word;
+}
+.

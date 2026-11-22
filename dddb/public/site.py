@@ -94,7 +94,7 @@ logger = logging.getLogger("dddb.public")
 STATIC_DIR = Path(__file__).with_name("static")
 
 #: 允许直接发送的静态文件白名单 —— 不按用户输入拼路径, 从根上杜绝目录穿越
-STATIC_FILES = ("public.css", "public.js", "cover-crop.js",
+STATIC_FILES = ("public.css", "public.js", "cover-crop.js", "infobox.js",
                 "favicon.svg", "logo.svg")
 
 #: 用户端默认端口

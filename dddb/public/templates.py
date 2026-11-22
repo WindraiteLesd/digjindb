@@ -545,12 +545,13 @@ def layout(
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
 <title>{esc(title)} · {esc(ctx.site_name)}</title>
-<link rel="stylesheet" href="/static/public.css?v=69">
+<link rel="stylesheet" href="/static/public.css?v=70">
 <!-- ?v=2: 图标换过, 但静态资源被 CF/浏览器缓存 1 天, 加版本号强制刷新 -->
 <link rel="icon" href="/static/favicon.svg?v=2" type="image/svg+xml">
 <!-- 唯一的脚本: 同源外链, 只做渐进增强(CSP 只给 script-src 'self') -->
 <script src="/static/public.js?v=54" defer></script>
-<script src="/static/cover-crop.js?v=5" defer></script>
+<script src="/static/cover-crop.js?v=6" defer></script>
+<script src="/static/infobox.js?v=2" defer></script>
 </head>
 <body{_bg_attr(ctx)}>
 <a class="skip" href="#content">跳到正文</a>
@@ -4767,6 +4768,52 @@ def _track_row_html(row: Mapping[str, Any], disc: int, position: int) -> str:
 
 
 
+def _infobox_widget(album: Mapping[str, Any]) -> str:
+    """「编辑 infobox」按钮 + 弹窗(纯前端, 不请求服务端).
+
+    用户要求: 线上新建/编辑页能粘一段 dddb infobox 一键填入所有字段,
+    并能查看/修改当前专辑的 infobox。
+    """
+    from .. import infobox as IB
+
+    # 当前专辑的 infobox(编辑页预填; 新建页为空)
+    try:
+        current = IB.build(album) if album else ""
+    except Exception:                         # noqa: BLE001
+        current = ""
+
+    return (
+        '<div class="infobox-bar">'
+        '<button type="button" class="btn-ghost btn-xs" data-infobox-open="1">'
+        '编辑 infobox</button>'
+        '<span class="field-hint">粘贴 dddb infobox 可一键填入</span>'
+        '</div>'
+        '<div class="infobox-modal" data-infobox-modal="1" hidden>'
+        '<div class="infobox-panel">'
+        '<div class="infobox-head"><strong>dddb infobox</strong>'
+        '<button type="button" class="infobox-x" data-infobox-close="1"'
+        ' aria-label="关闭">✕</button></div>'
+        '<textarea class="infobox-text" data-infobox-text="1" rows="16"'
+        ' spellcheck="false" placeholder="[dddb]\ntitle_original || 标题">'
+        '{current}</textarea>'
+        '<div class="infobox-acts">'
+        '<button type="button" class="btn-ghost btn-xs"'
+        ' data-infobox-help="1">格式说明</button>'
+        '<span class="infobox-msg" data-infobox-msg="1"></span>'
+        '<button type="button" class="btn-ghost btn-xs"'
+        ' data-infobox-close="1">取消</button>'
+        '<button type="button" class="btn" data-infobox-apply="1">填入</button>'
+        '</div></div></div>'
+        '<div class="infobox-modal" data-infobox-help-modal="1" hidden>'
+        '<div class="infobox-panel infobox-help-panel">'
+        '<div class="infobox-head"><strong>infobox 格式</strong>'
+        '<button type="button" class="infobox-x" data-infobox-help-close="1"'
+        ' aria-label="关闭">✕</button></div>'
+        '<pre class="infobox-help-text">{help_text}</pre>'
+        '</div></div>'
+    ).format(current=esc(current), help_text=esc(IB.HELP_TEXT))
+
+
 def _photos_html(key: Any, ctx: SiteContext,
                  album: Mapping[str, Any]) -> str:
     """「其他照片」区: 与封面分开, 可加备注.
@@ -5128,7 +5175,8 @@ def edit_album_page(
     _cards: dict[str, str] = {}
     _cards["cover"] = _card(
         "cover",
-        _cover_inner
+        _infobox_widget(album)
+        + _cover_inner
         + '<div class="form-grid">'
         + _text_input(values, errs, "title_original", "标题(原题)", required=True)
         + _text_input(values, errs, "title", "标题(译名/显示名)", hint="留空则用原题")

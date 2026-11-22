@@ -18,7 +18,7 @@
   var modal = null;          // 裁切弹窗
   var state = {
     kind: "cover",           // cover | photo
-    square: true,            // 默认 1:1 方形(用户要求)
+    square: false,           // 默认**不**锁 1:1(框就是图片边界); 可手动开
     keepScale: false,        // false = 打开时重置为 contain 基准
     form: null,
     file: null,
@@ -92,6 +92,22 @@
     noteInput.maxLength = 200;
     noteRow.appendChild(noteInput);
 
+    var squareRow = el("label", "crop-square");
+    var squareBox = el("input");
+    squareBox.type = "checkbox";
+    squareRow.appendChild(squareBox);
+    squareRow.appendChild(el("span", null, "锁定 1:1 方形"));
+    squareBox.addEventListener("change", function () {
+      state.square = !!squareBox.checked;
+      if (state.square) {
+        enforceSquare();
+        clampBoxToImage();
+        paintFrame();
+        applyTransform();
+      }
+    });
+    squareBox.checked = state.square;
+
     var acts = el("div", "crop-acts");
     var cancel = el("button", "ghost", "取消");
     cancel.type = "button";
@@ -105,6 +121,7 @@
     panel.appendChild(head);
     panel.appendChild(stage);
     panel.appendChild(zoomRow);
+    panel.appendChild(squareRow);
     panel.appendChild(noteRow);
     panel.appendChild(acts);
     modal.appendChild(panel);
@@ -141,10 +158,12 @@
     state.scale = 1;
     state.offset = {x: 0, y: 0};
     state.keepScale = false;      // 每次打开都重新按 contain 算
-    state.square = true;          // 默认方形
+    state.square = false;         // 默认不锁方形(框=图片边界)
     state.note = "";
 
     var refs = modal._refs;
+    var sq = modal.querySelector(".crop-square input");
+    if (sq) { sq.checked = state.square; }
     refs.noteRow.style.display = kind === "photo" ? "block" : "none";
     refs.noteInput.value = "";
     modal.classList.add("on");
@@ -230,15 +249,14 @@
     var imgLeft = (sw - dispW) / 2 + state.offset.x;
     var imgTop = (sh - dispH) / 2 + state.offset.y;
 
-    // ---- 默认 1:1 方形框 ----
-    // 取图片显示区域的**短边**(即最大内接正方形), 再留一点边距。
-    var side = Math.min(dispW, dispH);
-    side = Math.round(side * 0.92);
-    side = Math.max(MIN_BOX, Math.min(side, Math.min(sw, sh) - 8));
+    // ---- 默认框 = **图片完整边界** ----
+    // 用户要求: "边界默认就是图片本身边界", 不要内缩、不要强制方形。
+    // 想裁方形/局部时自己拖四个角。
     state.box = {
-      x: Math.round(imgLeft + (dispW - side) / 2),
-      y: Math.round(imgTop + (dispH - side) / 2),
-      w: side, h: side
+      x: Math.round(imgLeft),
+      y: Math.round(imgTop),
+      w: Math.max(MIN_BOX, Math.round(dispW)),
+      h: Math.max(MIN_BOX, Math.round(dispH))
     };
     clampBoxToImage();
     applyTransform();
