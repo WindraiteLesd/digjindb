@@ -865,10 +865,22 @@ def parse_album_form(
     names = many_fields(values, "credit_name")
     if max(len(roles), len(names)) > MAX_ROWS:
         errors["credits"] = f"词条最多 {MAX_ROWS} 行"
-    # 可选的「原名」「别名」列(歌词解析导入时会用到, 手填可留空)
+    # 「原名」「别名」两列已从表单里去掉(用户要求恢复原界面), 但歌词解析
+    # 导入的老数据里可能还有值。表单**完全不带**这两列时, 按 (职位, 人名)
+    # 从现有数据里把值捡回来, 免得一次普通保存就把它们清空。
     originals = many_fields(values, "credit_original")
     aliases = many_fields(values, "credit_alias")
     raw_roles = many_fields(values, "credit_raw_role")
+    _keep_extra = "credit_original" not in values and "credit_alias" not in values
+    _late: dict[tuple[str, str], tuple[str, str]] = {}
+    if _keep_extra and current:
+        for _old in (current.get("credits") or []):
+            if not isinstance(_old, Mapping):
+                continue
+            _extra = (str(_old.get("original") or ""), str(_old.get("alias") or ""))
+            if not _extra[0] and not _extra[1]:
+                continue
+            _late[(str(_old.get("role") or ""), str(_old.get("name") or ""))] = _extra
 
     def _opt(seq: list[str], pos: int) -> str:
         return str(seq[pos]).strip() if pos < len(seq) else ""
@@ -880,6 +892,8 @@ def parse_album_form(
             continue  # 空行忽略(表单里有几行留白是正常的)
         original = _opt(originals, position)
         alias = _opt(aliases, position)
+        if _keep_extra and not original and not alias:
+            original, alias = _late.get((role, name), ("", ""))
         raw_role = _opt(raw_roles, position)
         for one in split_list(name):
             item: dict[str, Any] = {"role": role or "artist", "name": one}
