@@ -51,16 +51,17 @@ MARK = "[dddb]"
 
 #: 字段顺序(导出时按这个顺序写, 解析时也按这个认)
 FIELDS = (
-    "key", "title_original", "title", "title_romaji", "circle", "artists",
-    "event", "release_date", "catalog_no", "price", "hall", "booth",
-    "tags", "genres", "cover", "links", "credits", "tracks", "description",
+    "key", "title_original", "title", "title_romaji", "circle", "company",
+    "artists", "event", "release_date", "catalog_no", "price", "hall",
+    "booth", "tags", "genres", "cover", "links", "credits", "tracks",
+    "description",
 )
 
 #: 单值字段(其它是多行)
 SINGLE_FIELDS = frozenset({
-    "key", "title_original", "title", "title_romaji", "circle", "artists",
-    "event", "release_date", "catalog_no", "price", "hall", "booth",
-    "tags", "genres", "cover",
+    "key", "title_original", "title", "title_romaji", "circle", "company",
+    "artists", "event", "release_date", "catalog_no", "price", "hall",
+    "booth", "tags", "genres", "cover",
 })
 
 #: 多行字段
@@ -81,6 +82,99 @@ _CREDIT = re.compile(r"^\s*([^:：]+)\s*[:：]\s*(.+?)\s*$")
 
 #: 外链写法: "标签: URL" / "标签 || URL"
 _LINK = re.compile(r"^\s*([^:：|]+?)\s*(?:[:：]|\|\|)\s*(\S+)\s*$")
+
+
+#: 三种输入形状 —— ``build()`` 必须都能认, 否则线上编辑页会导出一段空壳。
+#:
+#: * ``draft``: 导入草稿(``ImportDraft`` / :func:`parse` 的产物), 字段在 ``meta`` 子字典里
+#: * ``flat``: 扁平 payload(``Album.to_dict()`` —— 采集与线上编辑页用的就是这一种)
+#: * ``view``: 详情视图(:func:`dddb.public.data.PublicData.make_view`), 键名不同
+SHAPE_DRAFT = "draft"
+SHAPE_FLAT = "flat"
+SHAPE_VIEW = "view"
+
+#: 视图键 -> dddb 字段名(视图里没有"原题/译名"这组名字, 只有 title/title_alt)
+_VIEW_KEYS = {
+    "title_original": "title",
+    "title": "title_alt",
+    "title_romaji": "romaji",
+    "release_date": "date",
+}
+
+
+def _shape_of(d: Mapping[str, Any], meta: Mapping[str, Any]) -> str:
+    """判断输入是草稿 / 扁平 payload / 详情视图."""
+    if meta:
+        return SHAPE_DRAFT
+    if "title_alt" in d or "romaji" in d:
+        return SHAPE_VIEW
+    if "date" in d and "release_date" not in d:
+        return SHAPE_VIEW
+    return SHAPE_FLAT
+
+
+def _value_of(d: Mapping[str, Any], meta: Mapping[str, Any],
+              shape: str, name: str) -> Any:
+    """按形状取一个单值字段."""
+    if shape == SHAPE_DRAFT:
+        return meta.get(name)
+    if shape == SHAPE_VIEW:
+        # 视图换了名字的字段只认映射里的键(否则 title 会跟 title_original 重复)
+        key = _VIEW_KEYS.get(name)
+        return d.get(key) if key else d.get(name)
+    return d.get(name)
+
+
+def _link_rows(urls: Any) -> list[tuple[str, str]]:
+    """外链的三种写法: dict / ``[{key,value}]`` / ``[{name,url}]``(视图)."""
+    rows: list[tuple[str, str]] = []
+    if isinstance(urls, Mapping):
+        for label, url in urls.items():
+            if _clean(url):
+                rows.append((_clean(label) or "链接", _clean(url)))
+    elif isinstance(urls, (list, tuple)):
+        for item in urls:
+            if not isinstance(item, Mapping):
+                continue
+            url = item.get("value") or item.get("url")
+            if not _clean(url):
+                continue
+            label = item.get("key") or item.get("name") or "链接"
+            rows.append((_clean(label), _clean(url)))
+    return rows
+
+
+def _credit_rows(credits: Any,
+                 artist_names: set[str]) -> list[tuple[str, str, str, str]]:
+    """词条 -> ``(职位, 人名, 原名, 别名)``.
+
+    * ``circle`` 职责与 ``circle`` 字段重复, 丢掉
+    * 视图里的词条是 :func:`group_credits` 分组后的 ``{role,label,names,count}``
+    * 人名已经在 ``artists`` 里的 ``artist`` 词条也丢掉(同一份数据的两种表示)
+    """
+    rows: list[tuple[str, str, str, str]] = []
+    if not isinstance(credits, (list, tuple)):
+        return rows
+    for item in credits:
+        if not isinstance(item, Mapping):
+            continue
+        role = _clean(item.get("role")) or "artist"
+        if role == "circle":
+            continue
+        names = item.get("names")
+        if isinstance(names, (list, tuple)):
+            for name in names:
+                if _clean(name):
+                    rows.append((role, _clean(name), "", ""))
+            continue
+        name = _clean(item.get("name"))
+        if not name:
+            continue
+        if role == "artist" and name in artist_names:
+            continue
+        rows.append((role, name, _clean(item.get("original")),
+                     _clean(item.get("alias"))))
+    return rows
 
 
 def _clean(value: Any) -> str:
@@ -114,9 +208,14 @@ def _parse_duration(text: Any) -> int:
 
 
 def build(draft: Any) -> str:
-    """把 ImportDraft(或同形 dict) 导成 infobox 文本."""
+    """把三种输入形状导成 infobox 文本.
+
+    ``draft`` 可以是 :class:`ImportDraft` / 扁平 payload / 详情视图 ——
+    线上编辑页传的是扁平 payload, 以前只认草稿形状, 于是整段只剩 key 与外链。
+    """
     d = draft.to_dict() if hasattr(draft, "to_dict") else dict(draft or {})
     meta = d.get("meta") or {}
+    shape = _shape_of(d, meta)
     lines: list[str] = [MARK]
 
     def put(name: str, value: Any) -> None:
@@ -125,80 +224,74 @@ def build(draft: Any) -> str:
             return
         lines.append("{} || {}".format(name, text))
 
+    def field(name: str) -> Any:
+        return _value_of(d, meta, shape, name)
+
     put("key", d.get("key") or meta.get("key") or "")
     for name in ("title_original", "title", "title_romaji", "circle",
-                 "event", "release_date", "catalog_no", "price",
-                 "hall", "booth"):
-        put(name, meta.get(name))
+                 "company", "event", "release_date", "catalog_no",
+                 "price", "hall", "booth"):
+        put(name, field(name))
 
-    artists = meta.get("artists")
-    if isinstance(artists, list):
-        put("artists", " / ".join(_clean(a) for a in artists if _clean(a)))
+    artists_value = field("artists")
+    if isinstance(artists_value, (list, tuple)):
+        ordered = [_clean(a) for a in artists_value if _clean(a)]
+        put("artists", " / ".join(ordered))
     else:
-        put("artists", artists)
+        ordered = [_clean(artists_value)] if _clean(artists_value) else []
+        put("artists", artists_value)
+    artist_names = set(ordered)
 
     for name in ("tags", "genres"):
-        val = meta.get(name)
-        if isinstance(val, list):
+        val = field(name)
+        if isinstance(val, (list, tuple)):
             put(name, " / ".join(_clean(v) for v in val if _clean(v)))
         else:
             put(name, val)
 
-    # 封面: 干部署时是远程 URL; 本地路径写 local: 前缀(便于识别)
+    # 封面: 远程 URL 优先; 只有本地文件时写 local: 前缀
     cover = _clean(d.get("cover_url"))
-    if not cover and d.get("cover_file"):
-        cover = "local:" + str(d.get("cover_file"))
+    if not cover:
+        local = d.get("cover_local") or d.get("cover_file")
+        if local:
+            cover = "local:" + str(local)
     put("cover", cover)
 
-    # 外链
-    urls = d.get("urls") or {}
-    if isinstance(urls, dict):
-        for label, url in urls.items():
-            if _clean(url):
-                lines.append("links || {}: {}".format(_clean(label), _clean(url)))
-    elif isinstance(urls, list):
-        for it in urls:
-            if isinstance(it, Mapping) and _clean(it.get("value")):
-                lines.append("links || {}: {}".format(
-                    _clean(it.get("key") or "链接"), _clean(it.get("value"))))
+    for label, url in _link_rows(d.get("urls")):
+        lines.append("links || {}: {}".format(label, url))
 
-    # 词条
-    for c in (d.get("credits") or []):
-        if not isinstance(c, Mapping):
-            continue
-        name = _clean(c.get("name"))
-        if not name:
-            continue
-        role = _clean(c.get("role")) or "artist"
+    for role, name, original, alias in _credit_rows(d.get("credits"),
+                                                   artist_names or set()):
         extra = ""
-        if _clean(c.get("original")):
-            extra += " ({})".format(_clean(c.get("original")))
-        if _clean(c.get("alias")):
-            extra += " [{}]".format(_clean(c.get("alias")))
+        if original:
+            extra += " ({})".format(original)
+        if alias:
+            extra += " [{}]".format(alias)
         lines.append("credits || {}: {}{}".format(role, name, extra))
 
-    # 曲目
-    for i, tr in enumerate((d.get("tracks") or []), 1):
-        if not isinstance(tr, Mapping):
-            continue
-        title = _clean(tr.get("title"))
-        if not title:
-            continue
-        idx = _clean(tr.get("index")) or str(i)
-        dur = _fmt_duration(tr.get("duration"))
-        tail = ""
-        ar = tr.get("artists")
-        if isinstance(ar, list):
-            ar = " / ".join(_clean(a) for a in ar if _clean(a))
-        if _clean(ar):
-            tail = " / " + _clean(ar)
-        line = "tracks || {}. {}".format(idx, title)
-        if dur:
-            line += " [{}]".format(dur)
-        lines.append(line + tail)
+    tracks = d.get("tracks")
+    if isinstance(tracks, (list, tuple)):
+        for i, tr in enumerate(tracks, 1):
+            if not isinstance(tr, Mapping):
+                continue
+            title = _clean(tr.get("title"))
+            if not title:
+                continue
+            idx = _clean(tr.get("index")) or str(i)
+            dur = _fmt_duration(tr.get("duration"))
+            tail = ""
+            ar = tr.get("artists")
+            if isinstance(ar, (list, tuple)):
+                ar = " / ".join(_clean(a) for a in ar if _clean(a))
+            if _clean(ar):
+                tail = " / " + _clean(ar)
+            line = "tracks || {}. {}".format(idx, title)
+            if dur:
+                line += " [{}]".format(dur)
+            lines.append(line + tail)
 
-    # 简介(多行原样, 用 || 续行)
-    desc = str(meta.get("description") or "")
+    desc = str((meta.get("description") if shape == SHAPE_DRAFT
+                else d.get("description")) or "")
     if desc.strip():
         first, *rest = desc.strip().split("\n")
         lines.append("description || {}".format(first.rstrip()))
@@ -359,6 +452,7 @@ HELP_TEXT = """\
 | title | 译名/显示名 | 血雪 |
 | title_romaji | 罗马字 | Blood Snow |
 | circle | 社团 | Winter Bouquet |
+| company | 发行公司 | Winter Records |
 | artists | 艺人，多个用 `/` 分隔 | A / B |
 | event | 展会 | M3-2026秋 |
 | release_date | 发售日 | 2026-10-25 |
