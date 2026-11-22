@@ -545,13 +545,13 @@ def layout(
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
 <title>{esc(title)} · {esc(ctx.site_name)}</title>
-<link rel="stylesheet" href="/static/public.css?v=71">
+<link rel="stylesheet" href="/static/public.css?v=72">
 <!-- ?v=2: 图标换过, 但静态资源被 CF/浏览器缓存 1 天, 加版本号强制刷新 -->
 <link rel="icon" href="/static/favicon.svg?v=2" type="image/svg+xml">
 <!-- 唯一的脚本: 同源外链, 只做渐进增强(CSP 只给 script-src 'self') -->
 <script src="/static/public.js?v=54" defer></script>
 <script src="/static/cover-crop.js?v=6" defer></script>
-<script src="/static/infobox.js?v=3" defer></script>
+<script src="/static/infobox.js?v=4" defer></script>
 </head>
 <body{_bg_attr(ctx)}>
 <a class="skip" href="#content">跳到正文</a>
@@ -4925,18 +4925,11 @@ def edit_album_page(
         '<label class="field auth-field"><span>人员</span>'
         '<input type="text" name="credit_name" value="{}"'
         ' placeholder="多人用、分隔"></label>'
-        '<label class="field auth-field pair-opt"><span>原名</span>'
-        '<input type="text" name="credit_original" value="{}"'
-        ' placeholder="可选，如 Xuanan Xu"></label>'
-        '<label class="field auth-field pair-opt"><span>别名</span>'
-        '<input type="text" name="credit_alias" value="{}"'
-        ' placeholder="可选，如 (HOYO-MIX)"></label>'
         '<input type="hidden" name="credit_raw_role" value="{}">'
         '<button type="button" class="pair-del" data-pair-del="credit"'
         ' title="删除这一条" aria-label="删除这一条">✕</button>'
         "</div>".format(
             esc(row.get("role") or ""), esc(row.get("name") or ""),
-            esc(row.get("original") or ""), esc(row.get("alias") or ""),
             esc(row.get("raw_role") or ""))
         for row in credit_rows
     )
@@ -5298,14 +5291,15 @@ def edit_album_page(
             ' data-credit-person-del="1" aria-label="移除 {}">×</button>'
             "</span>".format(esc(_one), esc(_one), esc(_one))
             for _one in _names)
-        _row_original = str(_row.get("original") or "")
-        _row_alias = str(_row.get("alias") or "")
         _row_raw = str(_row.get("raw_role") or "")
+        # 一行只有 职责 / 人员 / 删除 —— 与「＋ 添加词条」新建的行完全一致
+        # (以前这里多渲染了「原名」「别名」两列, 新加的行却没有, 同一张卡里
+        #  两种长相, 看着像坏了)
         return (
             '<div class="pair-row credit-row" data-pair-row="credit">'
             '<label class="field auth-field"><span>职责</span>'
             '<input type="text" name="credit_role" value="{}"'
-            ' placeholder="如 编曲 / 演唱 / 钢琴"></label>'
+            ' placeholder="如 编曲 / 演唱"></label>'
             '<div class="field auth-field credit-people-field">'
             '<span>人员<span class="field-hint">输入后回车加入</span></span>'
             '<div class="credit-people-box">'
@@ -5315,18 +5309,11 @@ def edit_album_page(
             "</div>"
             '<input type="hidden" name="credit_name" value="{}">'
             "</div>"
-            '<label class="field auth-field credit-extra"><span>原名</span>'
-            '<input type="text" name="credit_original" value="{}"'
-            ' placeholder="可选"></label>'
-            '<label class="field auth-field credit-extra"><span>别名</span>'
-            '<input type="text" name="credit_alias" value="{}"'
-            ' placeholder="可选"></label>'
             '<input type="hidden" name="credit_raw_role" value="{}">'
             '<button type="button" class="pair-del" data-pair-del="credit"'
             ' title="删除这一条" aria-label="删除这一条">✕</button>'
             "</div>".format(
-                esc(_role), _chips, esc(_label),
-                esc(_row_original), esc(_row_alias), esc(_row_raw))
+                esc(_role), _chips, esc(_label), esc(_row_raw))
         )
 
     _credit_rows = "".join(_credit_row(_row) for _row in credit_rows)
