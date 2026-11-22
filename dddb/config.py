@@ -113,6 +113,12 @@ class AdminConfig:
     cloud_db: str = "data/cloud_mirror.sqlite3"
     #: 线上站点地址 —— "详情"按钮直接跳这里
     cloud_base_url: str = "https://www.digjindb.top"
+    #: 拉取镜像用的 SSH 目标(如 ``ubuntu@1.2.3.4``)。留空 = 不自动拉取。
+    cloud_ssh: str = ""
+    #: 拉取镜像用的私钥路径。留空 = 走 ssh 默认/agent。
+    cloud_ssh_key: str = ""
+    #: 线上库里那个文件在服务器上的绝对路径。
+    cloud_db_remote: str = "/srv/dddb/data/dddb.sqlite3"
     #: 映射库路径。留空则与主库同目录, 名为 dddb_admin.sqlite3。
     admin_db: str = ""
     # 注意: 曲目表/封面是否抓取由 [match].fetch_tracks / fetch_cover 控制,
