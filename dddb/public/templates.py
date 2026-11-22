@@ -545,11 +545,11 @@ def layout(
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
 <title>{esc(title)} · {esc(ctx.site_name)}</title>
-<link rel="stylesheet" href="/static/public.css?v=72">
+<link rel="stylesheet" href="/static/public.css?v=73">
 <!-- ?v=2: 图标换过, 但静态资源被 CF/浏览器缓存 1 天, 加版本号强制刷新 -->
 <link rel="icon" href="/static/favicon.svg?v=2" type="image/svg+xml">
 <!-- 唯一的脚本: 同源外链, 只做渐进增强(CSP 只给 script-src 'self') -->
-<script src="/static/public.js?v=54" defer></script>
+<script src="/static/public.js?v=55" defer></script>
 <script src="/static/cover-crop.js?v=6" defer></script>
 <script src="/static/infobox.js?v=4" defer></script>
 </head>
@@ -5128,15 +5128,22 @@ def edit_album_page(
 
     # 封面区: 编辑模式走异步上传(需要已有 key); 新建模式随主表单一起提交
     if creating:
+        # 新建模式: 封面随主表单一起提交, 不能走异步上传(还没有 key),
+        # 也就不能进裁切弹窗。所以这里给一个**只选图 + 本地预览**的按钮,
+        # 选区由 public.js 的 setupCoverPick 接管(不拦截 change)。
         _cover_inner = (
             '<div class="edit-cover-row">'
             '<div class="edit-cover-thumb">'
-            '<div class="cover cover-fallback edit-cover-img"><span>新建</span>'
+            '<div class="cover cover-fallback edit-cover-img">'
+            '<span>新建</span>'
+            '<img class="cover-preview-img" alt="" hidden>'
             '</div></div>'
             '<div class="cover-form">'
             '<input type="file" name="cover" id="cover-input"'
             ' accept="image/png,image/jpeg,image/webp" class="cover-file">'
             '<p class="cover-picked" id="cover-picked"></p>'
+            '<button type="button" class="btn-ghost btn-xs cover-upload-btn"'
+            ' data-cover-pick="1">上传封面</button>'
             '<p class="field-hint">PNG / JPEG / WebP，≤2MB；'
             '保存后随专辑一起创建</p>'
             '</div></div>'
