@@ -3239,11 +3239,6 @@ body.crop-open { overflow: hidden; }
 /* ==========================================================================
    dddb infobox 弹窗
    ========================================================================== */
-.infobox-bar {
-  display: flex; align-items: center; gap: 10px;
-  margin: 0 0 12px; padding-bottom: 10px;
-  border-bottom: 1px dashed var(--border-soft, #3a3430);
-}
 .infobox-modal {
   position: fixed; inset: 0; z-index: 9000;
   background: rgba(0, 0, 0, .6);
