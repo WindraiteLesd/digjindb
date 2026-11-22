@@ -132,11 +132,15 @@ class TestStillNoDuplicateUpload(unittest.TestCase):
         self.assertIn("hasGallery", block)
         self.assertIn("input.click()", block)
 
-    def test_credit_extra_fields(self) -> None:
-        """词条的原名/别名不能被顺手删掉。"""
+    def test_credit_rows_have_no_extra_fields(self) -> None:
+        """词条行只有 职责/人员/删除 —— 「原名」「别名」两列已移除。
+
+        这两列以前只出现在服务端渲染的已有词条里, JS 的「＋ 添加词条」
+        从不生成它们, 同一张卡里两种长相。现在统一成一种。
+        """
         src = TPL.read_text(encoding="utf-8")
-        for name in ("credit_original", "credit_alias"):
-            self.assertIn(name, src, f"缺 {name}")
+        self.assertNotIn('name="credit_original"', src)
+        self.assertNotIn('name="credit_alias"', src)
 
 
 if __name__ == "__main__":
