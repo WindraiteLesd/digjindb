@@ -1576,6 +1576,53 @@
      封面区不再是 form(嵌在主表单里会被浏览器丢弃), 所以用 fetch 单独上传;
      主表单的保存不会带上封面文件。
      ========================================================================== */
+  /* ==========================================================================
+     新建专辑: 封面「上传封面」按钮 = 只选图 + 本地预览
+
+     编辑模式有封面 key, 可以异步上传 + 裁切(cover-crop.js);
+     新建模式还没有 key, 封面只能随主表单一起提交, 所以不能走裁切弹窗。
+     这里只做两件事: 点按钮 -> 打开文件选择; 选完 -> 左侧缩略图预览。
+     ========================================================================== */
+  function setupCoverPick() {
+    var button = document.querySelector("[data-cover-pick]");
+    if (!button) { return; }
+    var input = document.getElementById("cover-input");
+    var hint = document.getElementById("cover-picked");
+    var thumb = document.querySelector(".cover-fallback");
+    var img = document.querySelector(".cover-preview-img");
+    var word = thumb ? thumb.querySelector("span") : null;
+    if (!input) { return; }
+
+    button.addEventListener("click", function (e) {
+      e.preventDefault();
+      input.click();
+    });
+
+    input.addEventListener("change", function () {
+      var file = input.files && input.files[0];
+      if (!file) { return; }
+      if (file.size > 2 * 1024 * 1024) {
+        if (hint) { hint.textContent = "图片不能超过 2MB"; }
+        input.value = "";
+        return;
+      }
+      if (hint) {
+        hint.textContent = "已选择: " + file.name + " (" +
+          Math.round(file.size / 1024) + " KB)";
+      }
+      if (!img) { return; }
+      // 用 FileReader 出 data: URL —— CSP 的 img-src 允许 data:,
+      // 但 createObjectURL 的 blob: 未必放行(踩过这个坑)。
+      var reader = new FileReader();
+      reader.onload = function () {
+        img.src = String(reader.result || "");
+        img.hidden = false;
+        if (word) { word.hidden = true; }
+      };
+      reader.readAsDataURL(file);
+    });
+  }
+
   function setupCoverUpload() {
     /* 「上传封面」按钮 = **打开文件选择**.
 
@@ -2361,6 +2408,8 @@
     setupGoBack();
     // 封面上传改由 cover-crop.js 接管(带裁切预览)
     // setupCoverUpload();
+    // 新建专辑: 没有 key, 不能异步上传, 只选图 + 预览
+    setupCoverPick();
     setupTrackRows();
     setupPairRows();
     setupNoEnterSubmit();
