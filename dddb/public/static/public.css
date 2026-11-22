@@ -1403,6 +1403,17 @@ body::before {
 
 .edit-cover-row .cover-upload-btn { margin-top: 8px; }
 
+/* 新建模式的封面本地预览: 同一个框里叠一层 img, 选完图顶掉「新建」两个字 */
+.edit-cover-row .edit-cover-img { position: relative; }
+.edit-cover-row .cover-preview-img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: var(--radius-sm);
+}
+
 @media (max-width: 640px) {
   .edit-cover-row { gap: 12px; }
   .edit-cover-row .edit-cover-thumb { width: 104px; height: 104px; }
