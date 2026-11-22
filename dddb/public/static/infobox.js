@@ -14,8 +14,8 @@
   var MARK = "[dddb]";
   var SINGLE = {
     key: 1, title_original: 1, title: 1, title_romaji: 1, circle: 1,
-    artists: 1, event: 1, release_date: 1, catalog_no: 1, price: 1,
-    hall: 1, booth: 1, tags: 1, genres: 1, cover: 1
+    company: 1, artists: 1, event: 1, release_date: 1, catalog_no: 1,
+    price: 1, hall: 1, booth: 1, tags: 1, genres: 1, cover: 1
   };
 
   function $(s, root) { return (root || document).querySelector(s); }
