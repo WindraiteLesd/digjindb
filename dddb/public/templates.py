@@ -545,13 +545,13 @@ def layout(
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
 <title>{esc(title)} · {esc(ctx.site_name)}</title>
-<link rel="stylesheet" href="/static/public.css?v=70">
+<link rel="stylesheet" href="/static/public.css?v=71">
 <!-- ?v=2: 图标换过, 但静态资源被 CF/浏览器缓存 1 天, 加版本号强制刷新 -->
 <link rel="icon" href="/static/favicon.svg?v=2" type="image/svg+xml">
 <!-- 唯一的脚本: 同源外链, 只做渐进增强(CSP 只给 script-src 'self') -->
 <script src="/static/public.js?v=54" defer></script>
 <script src="/static/cover-crop.js?v=6" defer></script>
-<script src="/static/infobox.js?v=2" defer></script>
+<script src="/static/infobox.js?v=3" defer></script>
 </head>
 <body{_bg_attr(ctx)}>
 <a class="skip" href="#content">跳到正文</a>
@@ -4768,11 +4768,21 @@ def _track_row_html(row: Mapping[str, Any], disc: int, position: int) -> str:
 
 
 
-def _infobox_widget(album: Mapping[str, Any]) -> str:
-    """「编辑 infobox」按钮 + 弹窗(纯前端, 不请求服务端).
+def _infobox_button() -> str:
+    """标题行里的「编辑 infobox」按钮.
 
-    用户要求: 线上新建/编辑页能粘一段 dddb infobox 一键填入所有字段,
-    并能查看/修改当前专辑的 infobox。
+    用户要求把按钮放在「新建专辑」旁边, 并且**不要**那句粘贴提示 ——
+    提示文案占位又啰嗦, 按钮自己说明了一切。
+    """
+    return ('<button type="button" class="btn-ghost btn-xs"'
+            ' data-infobox-open="1">编辑 infobox</button>')
+
+
+def _infobox_widget(album: Mapping[str, Any]) -> str:
+    """infobox 弹窗(纯前端, 不请求服务端).
+
+    弹窗是 ``position: fixed``, 放在页面哪里都一样; 但**按钮**在标题行,
+    所以这里只输出两个 modal —— 不输出 .infobox-bar 那一行。
     """
     from .. import infobox as IB
 
@@ -4783,11 +4793,6 @@ def _infobox_widget(album: Mapping[str, Any]) -> str:
         current = ""
 
     return (
-        '<div class="infobox-bar">'
-        '<button type="button" class="btn-ghost btn-xs" data-infobox-open="1">'
-        '编辑 infobox</button>'
-        '<span class="field-hint">粘贴 dddb infobox 可一键填入</span>'
-        '</div>'
         '<div class="infobox-modal" data-infobox-modal="1" hidden>'
         '<div class="infobox-panel">'
         '<div class="infobox-head"><strong>dddb infobox</strong>'
@@ -5175,8 +5180,7 @@ def edit_album_page(
     _cards: dict[str, str] = {}
     _cards["cover"] = _card(
         "cover",
-        _infobox_widget(album)
-        + _cover_inner
+        _cover_inner
         + '<div class="form-grid">'
         + _text_input(values, errs, "title_original", "标题(原题)", required=True)
         + _text_input(values, errs, "title", "标题(译名/显示名)", hint="留空则用原题")
@@ -5393,6 +5397,7 @@ def edit_album_page(
                   ' <span class="muted">· 键 {2}</span></p>').format(
                       esc(quote_segment(key)), esc(album.get("title") or key),
                       key_html)
+    _infobox_html = _infobox_widget(album)
     body = f"""{_intro}
     {notice_html}{summary}
     <form class="edit-form" method="post" action="{esc(_form_action)}" enctype="multipart/form-data" data-entity-form="album">
@@ -5421,7 +5426,7 @@ def edit_album_page(
     </div>
     <div class="field-actions edit-actions" hidden>
     </div>
-    </form>{_delete_form}"""
+    </form>{_delete_form}{_infobox_html}"""
     if creating:
         _crumbs = [("浏览", "/albums"), ("编辑", "/edit"), ("新建专辑", "")]
     else:
@@ -5429,9 +5434,14 @@ def edit_album_page(
                    (str(album.get("title") or key),
                     "/album/{}".format(quote_segment(key))),
                    ("编辑", "")]
+    # 标题行动作: 「新建专辑」后面紧跟「编辑 infobox」
+    # (显式传入后 layout 不再自动补, 所以「新建专辑」要自己带上)
+    _title_actions = entity_new_buttons(ctx, ("album",))
+    if ctx.is_editor:
+        _title_actions += _infobox_button()
     return layout(
         ctx, title=_page_title, body=body, active="albums", wide=True,
-        breadcrumbs=_crumbs,
+        breadcrumbs=_crumbs, title_actions=_title_actions,
     )
 
 
