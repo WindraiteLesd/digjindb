@@ -130,6 +130,24 @@
       return out;
     }
 
+    /* 外部改写艺术家隐藏域(infobox 填入) -> 重建上方按钮.
+       否则 sync() 会用**空**的按钮列表把 hidden 覆盖回空。 */
+    function readHidden() {
+      if (!hidden) { return; }
+      var wanted = [];
+      (hidden.value || "").split(/[\n、]+/).forEach(function (part) {
+        var one = part.trim();
+        if (one && wanted.indexOf(one) === -1) { wanted.push(one); }
+      });
+      if (!wanted.length) { return; }
+      var have = names();
+      if (wanted.join("\n") === have.join("\n")) { return; }
+      wanted.forEach(function (one) {
+        if (have.indexOf(one) === -1) { host.appendChild(makeChip(one, 0)); }
+      });
+      sync();
+    }
+
     function sync() {
       if (hidden) { hidden.value = names().join("\n"); }
       // 已加进按钮的候选不再显示
@@ -266,6 +284,8 @@
           function (one) { one.style.display = "none"; });
       });
     }
+
+    if (hidden) { hidden.addEventListener("change", readHidden); }
 
     sync();
   }
@@ -1375,11 +1395,25 @@
       }
 
       // 初始值: 换行或"、"都拆开(兼容旧数据)
-      (hidden.value || "").split(/[\n、]+/).forEach(function (part) {
-        var value = part.trim();
-        if (value && items.indexOf(value) === -1) { items.push(value); }
-      });
+      function readHidden() {
+        items = [];
+        (hidden.value || "").split(/[\n、]+/).forEach(function (part) {
+          var value = part.trim();
+          if (value && items.indexOf(value) === -1) { items.push(value); }
+        });
+      }
+      readHidden();
       sync();
+
+      // **外部改写隐藏域时重建 chips**
+      //   infobox「一键填入」直接写 hidden.value 并派发 change;
+      //   这里如果不重建 items, 之后任何一次 chip 增删都会用旧的 items
+      //   把 hidden 覆盖回去 —— 表现为"填进去又没了"。
+      hidden.addEventListener("change", function () {
+        var before = items.join("\n");
+        readHidden();
+        if (items.join("\n") !== before) { sync(); }
+      });
 
       input.addEventListener("input", function () { filter(input.value); });
       input.addEventListener("focus", function () { filter(input.value); });
