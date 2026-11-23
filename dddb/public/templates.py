@@ -528,7 +528,7 @@ def layout(
     if ctx.user and ctx.needs_email_verify:
         verify_banner = (
             '<div class="notice notice-warn" role="alert">你的邮箱还没有验证：'
-            '未验证时**只有浏览权限**，<b>请在邮件发出后的 24 小时内验证，否则您的账号将被删除</b>。'
+            '未验证时只有浏览权限，<b>请在邮件发出后的 24 小时内验证，否则您的账号将被删除</b>。'
             '<form class="inline-form" method="post" action="/verify/resend">'
             f'<input type="hidden" name="{CSRF_FIELD}" value="{esc(ctx.csrf_token)}">'
             '<button class="btn-ghost btn-xs" type="submit">重新发送验证邮件</button></form>'
