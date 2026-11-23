@@ -4875,7 +4875,9 @@ class PublicSite:
                 # track_* 多列 / credit_role+credit_name 配对 /
                 # url_key+url_value 配对 / agents 隐藏字段,
                 # 只认扁平 textarea 的旧解析会把这些字段全丢掉。
-                patch, errors = T.parse_album_form(values)
+                # 注意: ``parse_album_form`` 在本模块里, 不在 templates 里 ——
+                # 写成 ``T.parse_album_form`` 会让 /new/album 直接 500。
+                patch, errors = parse_album_form(values)
                 if errors:
                     # 有错就回填整张卡片界面(不是那张 19 个文本框的旧表单)
                     return self._html(
@@ -4888,6 +4890,16 @@ class PublicSite:
                             creating=True,
                         ),
                         status=400, cookies=cookies)
+                # 「整段粘贴」曲目: 编辑页由 _do_album_edit 处理, 新建页
+                # 以前**完全没读** track_paste —— 粘贴进来的曲目全丢。
+                # 这里与编辑页用同一套解析 + 合并。
+                paste_text = raw_field(values, "track_paste")
+                if paste_text.strip():
+                    parsed = parse_tracklist(paste_text)
+                    if parsed:
+                        patch["track_list"] = merge_pasted_tracks(
+                            patch.get("track_list") or [], parsed,
+                            normalize_track_mode(text_field(values, "track_mode")))
                 title = str(patch.get("title_original")
                             or patch.get("title") or "").strip()
                 if not title:
