@@ -235,9 +235,17 @@ def build(draft: Any) -> str:
     put("title_original", _orig)
     if _disp and _disp != _orig:
         put("title", _disp)
-    for name in ("title_romaji", "circle", "company", "event",
+    for name in ("title_romaji", "circle", "event",
                  "release_date", "catalog_no", "price", "hall", "booth"):
         put(name, field(name))
+    # 发行公司: 只在**与社团不同**时才输出.
+    # 网易云的厂牌常常就是社团名, 导出后会变成 ``circle || N_dog`` 与
+    # ``company || N_dog`` 两条重复; 而且线上编辑页「发行公司」是独立字段,
+    # 用户明确说"circle 应该对应社团而不是发行公司, 大部分专辑都不会用到
+    # 发行公司这个条目"。同值时省略, 避免它被当成社团的另一种写法。
+    _company = _clean(field("company"))
+    if _company and _company != _clean(field("circle")):
+        put("company", _company)
 
     artists_value = field("artists")
     if isinstance(artists_value, (list, tuple)):
@@ -389,7 +397,10 @@ def parse(text: Any) -> dict[str, Any]:
                 "title": title, "duration": dur,
             }
             if ar:
-                tr["artists"] = [x.strip() for x in re.split(r"\s*/\s*", ar)
+                # 网易云导出的是「N_dog、Letsu」, 手写习惯是「A / B」——
+                # 两种都要拆, 否则整串当成一个艺人名。
+                tr["artists"] = [x.strip() for x in
+                                 re.split(r"\s*/\s*|\s*[、,，;；]\s*", ar)
                                  if x.strip()]
             out["tracks"].append(tr)
 
