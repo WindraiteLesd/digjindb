@@ -219,7 +219,10 @@ _PIECE_SPLIT_RE = re.compile(r"[\s|/\-–—]+")
 #: 标题 / 艺人分隔符: **两侧都要有空白**。``Re:Collection -X-`` 这种曲名里的
 #: ``-`` 因此不会被误当分隔符; ``曲名/艺人``(无空格)也保守地不拆。
 _SPLIT_RE = re.compile(r"\s+/\s+|\s+[-–—]\s+")
-_ARTIST_SPLIT_RE = re.compile(r"\s+/\s+")
+#: 同一行里分隔多个艺人. 除了 `` / `` 还要认全角/半角顿号与逗号 ——
+#: infobox 与网易云导出的曲目行是 ``曲名 / A、B`` 这种写法, 只认斜杠会
+#: 把 ``A、B`` 当成一个艺人名存进库。
+_ARTIST_SPLIT_RE = re.compile(r"\s*/\s*|\s*[、,，;；]\s*")
 _CELL_ARTIST_SPLIT_RE = re.compile(r"\s*/\s*|[,，、;；]\s*")
 #: 表格首列的轨号(``01`` / ``01.`` / ``Tr.1`` / ``#01``)
 _BARE_INDEX_RE = re.compile(
