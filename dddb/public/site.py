@@ -29,17 +29,21 @@ from .embed import extract_embed as _extract_embed
 from . import i18n as I18N
 
 import argparse
+import ipaddress
 import logging
 import math
 import mimetypes
 import os
 import re
+import socket
 import sqlite3
 import struct
 import sys
 import threading
 import time
+import urllib.error
 import urllib.parse
+import urllib.request
 import zlib
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -463,6 +467,9 @@ def parse_route(path: str) -> dict[str, str]:
         return {"name": "album_comment", "arg": "/".join(rest[:-1])}
     if name == "album" and len(rest) >= 2 and rest[-1].lower() == "cover":
         return {"name": "album_cover", "arg": "/".join(rest[:-1])}
+    # 给个图片地址, 服务端抓下来当封面(编辑页 infobox 的 cover 字段用)
+    if name == "album" and len(rest) >= 2 and rest[-1].lower() == "cover-url":
+        return {"name": "album_cover_url", "arg": "/".join(rest[:-1])}
     # 外链嵌入播放器: /embed/<album key>/<序号> -> 302 到平台播放器
     if name == "embed" and len(rest) >= 2:
         return {"name": "embed", "arg": "/".join(rest)}
@@ -652,6 +659,110 @@ def parse_upload(headers: Mapping[str, Any], body: bytes,
             continue
         return blob, file_type.group(1).decode("ascii", "replace").strip()
     return None
+
+
+#: 「按 URL 抓封面」允许的图片类型(与上传一致, **不含 svg** —— svg 能跑脚本).
+_URL_COVER_TYPES = {
+    "image/png": ".png",
+    "image/jpeg": ".jpg",
+    "image/webp": ".webp",
+}
+
+#: 「按 URL 抓封面」的单图上限(与编辑页上传一致)
+MAX_URL_COVER_BYTES = 2 * 1024 * 1024
+
+#: 抓图时用的 UA: 图床/CDN 对空 UA 常回 403
+_COVER_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/126.0 Safari/537.36"
+)
+
+
+class CoverFetchError(ValueError):
+    """按 URL 抓封面失败(消息直接给人看)."""
+
+
+def is_public_image_url(url: str) -> bool:
+    """这个 URL 能不能让**服务端**去抓.
+
+    服务端抓用户给的地址 = SSRF 风险, 所以这里挡死: 只放行 ``http/https``,
+    且解析出来的**每一个** IP 都必须是公网地址(回环/私网/链路本地/保留/
+    组播/未指定全拒)。域名解析失败也拒 —— 抓不到就没必要继续。
+    """
+    raw = str(url or "").strip()
+    if not raw:
+        return False
+    try:
+        parts = urllib.parse.urlsplit(raw)
+    except ValueError:
+        return False
+    if parts.scheme.lower() not in ("http", "https"):
+        return False
+    host = str(parts.hostname or "").strip().lower()
+    if not host:
+        return False
+    if host in ("localhost", "localhost.localdomain") or host.endswith(".localhost"):
+        return False
+    try:
+        infos = socket.getaddrinfo(host, parts.port or None, proto=socket.IPPROTO_TCP)
+    except OSError:
+        return False
+    if not infos:
+        return False
+    for info in infos:
+        addr = str(info[4][0] or "").split("%")[0]
+        try:
+            ip = ipaddress.ip_address(addr)
+        except ValueError:
+            return False
+        if (ip.is_private or ip.is_loopback or ip.is_link_local
+                or ip.is_reserved or ip.is_multicast or ip.is_unspecified):
+            return False
+    return True
+
+
+def fetch_image_from_url(url: str, *, timeout: float = DEFAULT_COVER_TIMEOUT,
+                         max_bytes: int = MAX_URL_COVER_BYTES) -> tuple[bytes, str]:
+    """抓一张远程图片 -> ``(bytes, mime)``; 任何问题都抛 :class:`CoverFetchError`.
+
+    用 ``urllib.request`` 而不是采集端的 HttpClient: 那套带 robots 与站点
+    节流(是给来源站批量采集用的), 这里是编辑者手动触发的一次性动作,
+    不该为了抓一张图去读 robots.txt 再排队。
+    """
+    raw = str(url or "").strip()
+    if not is_public_image_url(raw):
+        raise CoverFetchError("这个地址不允许抓取(只支持公网 http/https 图片)")
+    request = urllib.request.Request(raw, headers={
+        "User-Agent": _COVER_UA,
+        "Accept": "image/avif,image/webp,image/png,image/jpeg,image/*;q=0.8",
+    })
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            status = int(getattr(response, "status", 200) or 200)
+            if status >= 400:
+                raise CoverFetchError(f"对方返回 HTTP {status}")
+            ctype = str(response.headers.get("Content-Type") or "")
+            # 多读 1 字节: 用来判断"是不是超过上限了", 而不是把超大图全读进内存
+            blob = response.read(max_bytes + 1)
+    except CoverFetchError:
+        raise
+    except urllib.error.HTTPError as exc:
+        raise CoverFetchError(f"对方返回 HTTP {exc.code}") from exc
+    except urllib.error.URLError as exc:
+        raise CoverFetchError(f"抓取失败: {exc.reason}") from exc
+    except (TimeoutError, OSError) as exc:
+        raise CoverFetchError(f"抓取失败: {exc}") from exc
+    if not blob:
+        raise CoverFetchError("对方返回了空内容")
+    if len(blob) > max_bytes:
+        raise CoverFetchError(
+            f"图片超过 {max_bytes // (1024 * 1024)}MB, 请先压小")
+    sniffed = sniff_image_type(blob)
+    if sniffed not in _URL_COVER_TYPES:
+        raise CoverFetchError(
+            "这个地址不是 PNG / JPEG / WebP 图片, 抓回来的是 "
+            + (ctype.split(";")[0].strip() or sniffed))
+    return blob, sniffed
 
 
 def form_values(body: bytes) -> dict[str, list[str]]:
@@ -2451,6 +2562,9 @@ class PublicSite:
         if name == "album_cover":
             return self._do_album_cover(route.get("arg") or "", state, body,
                                         headers, cookies, values)
+        if name == "album_cover_url":
+            return self._do_album_cover_url(route.get("arg") or "", state, values,
+                                            cookies)
         if name == "album_photo":
             return self._do_album_photo(route.get("arg") or "", state, body,
                                         headers, cookies, values)
@@ -3308,49 +3422,14 @@ class PublicSite:
         if len(blob) > 2 * 1024 * 1024:
             return self._html(self.forbidden(state, "图片不能超过 2MB。"),
                               status=400, cookies=cookies)
-        # 写到**标准缓存路径** ``covers/<key>.img``: 封面服务本来就认这个位置,
-        # 这样即使专辑原有的 cover_local 指向失效路径也能立刻显示新封面。
-        stem = _cover_stem(key)
-        (Path(covers_dir) / "upload").mkdir(parents=True, exist_ok=True)
-        target = Path(covers_dir) / f"{stem}.img"
-        try:
-            target.write_bytes(blob)
-            # 顺手在 upload/ 留一份带扩展名的, 方便人工排查
-            (Path(covers_dir) / "upload" / f"{stem}{ext}").write_bytes(blob)
-        except OSError as exc:                     # pragma: no cover - 磁盘故障
-            return self._html(self.forbidden(state, f"保存失败: {exc}"),
-                              status=500, cookies=cookies)
+        # 写入标准缓存路径 ``covers/<key>.img``(封面服务认这个位置),
+        # 内部会写 cover_local + cover_v 并清掉两层缓存 —— 与
+        # 「按 URL 抓封面」共用同一份实现, 免得两处行为走偏。
         self._record_revision(state, str(key), "更新封面前快照")
-        from dddb.db import Store as _Store
-        store = _Store(self.db_path)
-        try:
-            # cover_v: URL 版本号, 让 /cover/<key>?v=... 变化 ——
-            # 封面响应是长缓存(1 天), 换图后 URL 不变的话 Cloudflare
-            # 会一直给旧副本(实测: 源站 75 字节新图, CF 返回 96041 字节旧图)。
-            import time as _time
-
-            ok, message = store.update_album_fields(key, {
-                "cover_local": str(target),
-                "cover_v": str(int(_time.time())),
-            })
-        finally:
-            store.close()
+        ok, note = self._store_cover_bytes(str(key), blob, mime, ext)
         if not ok:
-            return self._html(self.forbidden(state, f"写入专辑失败: {message}"),
+            return self._html(self.forbidden(state, note),
                               status=500, cookies=cookies)
-        # **两层缓存都要清**:
-        # 1) data 的列缓存(cover_lookup 用它找 cover_local);
-        # 2) 封面字节缓存(_cover_cache) —— 它按 mtime 失效, 而这台机器的
-        #    文件系统 mtime 精度不足, 覆盖同名文件后 mtime 可能不变,
-        #    只清第 1 层会导致"换了封面页面还是旧图"(实测踩到)。
-        try:
-            self.data.invalidate()
-        except Exception:                # noqa: BLE001
-            pass
-        try:
-            self.drop_cover_cache(target)
-        except Exception:                # noqa: BLE001
-            pass
         self.profile_call("add_contribution", self._member_uid(state), "cover", str(key),
                           str(album.get("title") or ""), default=0)
         self._record_revision(state, str(key), "更新封面")
@@ -3362,6 +3441,115 @@ class PublicSite:
         if not next_url.startswith("/") or next_url.startswith("//"):
             next_url = "/album/" + T.quote_segment(str(key)) + "/edit"
         return Response.redirect(next_url, status=303)
+
+    def _store_cover_bytes(self, key: str, blob: bytes, mime: str,
+                           ext: str) -> tuple[bool, str]:
+        """把一坨图片字节存成专辑封面(落盘 + 写库 + 清缓存) -> ``(ok, 说明)``.
+
+        与 :meth:`_do_album_cover` 的写盘部分同一套行为: 先写标准缓存路径
+        ``covers/<sha1(key)[:16]>.img``(封面服务认这个位置), 再在 ``upload/``
+        留一份带扩展名的方便人工排查, 最后写 ``cover_local`` + ``cover_v``。
+        """
+        covers_dir = getattr(self.data, "covers_dir", None)
+        if not covers_dir:
+            return False, "封面目录未配置。"
+        if self.db_path is None:
+            return False, "本站当前不允许写入。"
+        stem = _cover_stem(key)
+        try:
+            (Path(covers_dir) / "upload").mkdir(parents=True, exist_ok=True)
+            target = Path(covers_dir) / f"{stem}.img"
+            target.write_bytes(blob)
+            (Path(covers_dir) / "upload" / f"{stem}{ext}").write_bytes(blob)
+        except OSError as exc:                     # pragma: no cover - 磁盘故障
+            return False, f"保存失败: {exc}"
+        from dddb.db import Store as _Store
+        store = _Store(self.db_path)
+        try:
+            import time as _time
+
+            ok, message = store.update_album_fields(key, {
+                "cover_local": str(target),
+                "cover_v": str(int(_time.time())),
+            })
+        finally:
+            store.close()
+        if not ok:
+            return False, f"写入专辑失败: {message}"
+        try:
+            self.data.invalidate()
+        except Exception:                # noqa: BLE001
+            pass
+        try:
+            self.drop_cover_cache(target)
+        except Exception:                # noqa: BLE001
+            pass
+        return True, str(target)
+
+    def _store_cover_from_url(self, key: str, url: str) -> bool:
+        """抓 ``url`` 存成封面; **尽力而为**, 失败只记日志返回 False.
+
+        新建专辑时用: 封面抓不下来不该让「新建」失败(整张碟的信息都在了)。
+        """
+        try:
+            blob, mime = fetch_image_from_url(url)
+        except CoverFetchError as exc:
+            logger.warning("按 URL 抓封面失败(%s): %s", key, exc)
+            return False
+        ok, note = self._store_cover_bytes(key, blob, mime,
+                                          _URL_COVER_TYPES.get(mime, ".jpg"))
+        if not ok:
+            logger.warning("按 URL 抓封面落盘失败(%s): %s", key, note)
+        return ok
+
+    def _do_album_cover_url(self, key: str, state: auth.AuthState,
+                            values: Mapping[str, Any],
+                            cookies: list[str]) -> Response:
+        """POST /album/<key>/cover-url: 给个图片地址, 服务端抓下来当封面.
+
+        返回 JSON(前端 ``fetch`` 用), 成功 ``{"ok": true, "cover_v": "..."}``。
+        """
+        album = self.data.get_album(key) if key else None
+        if album is None:
+            return self._json({"ok": False, "error": f"没有这张专辑: {key}"},
+                              status=404, cookies=cookies)
+        if not self.can_edit(state):
+            return self._json({"ok": False, "error": "只有编辑者才能改封面。"},
+                              status=403, cookies=cookies)
+        if self.db_path is None:
+            return self._json({"ok": False, "error": "本站当前不允许写入。"},
+                              status=503, cookies=cookies)
+        url = text_field(values, "url").strip()
+        if not url:
+            return self._json({"ok": False, "error": "没有收到图片地址。"},
+                              status=400, cookies=cookies)
+        try:
+            blob, mime = fetch_image_from_url(url)
+        except CoverFetchError as exc:
+            return self._json({"ok": False, "error": str(exc)},
+                              status=400, cookies=cookies)
+        ext = _URL_COVER_TYPES.get(mime)
+        if ext is None:
+            return self._json({"ok": False, "error": "只支持 PNG / JPEG / WebP。"},
+                              status=400, cookies=cookies)
+        self._record_revision(state, str(key), "换封面前快照")
+        ok, note = self._store_cover_bytes(key, blob, mime, ext)
+        if not ok:
+            return self._json({"ok": False, "error": note},
+                              status=500, cookies=cookies)
+        self.profile_call("add_contribution", self._member_uid(state), "cover",
+                          str(key), str(album.get("title") or ""), default=0)
+        self._record_revision(state, str(key), "按链接换封面")
+        if state.session is not None:
+            state.session.flash = "封面已更新"
+        current = self.data.get_album(key) or album
+        # 视图里没有 cover_v 字段, 只有带版本号的封面地址(/cover/<key>?v=NNN)
+        cover_href = str(current.get("cover") or "")
+        return self._json({
+            "ok": True,
+            "cover_v": cover_href.split("?v=")[-1] if "?v=" in cover_href else "",
+            "message": "封面已更新",
+        }, cookies=cookies)
 
     def _do_account_security(self, name: str, values: Mapping[str, Any],
                              state: auth.AuthState, cookies: list[str]) -> Response:
@@ -4349,6 +4537,15 @@ class PublicSite:
             )
             return self._html(page, cookies=cookies)
         self.data.invalidate()
+        # infobox 的 cover 地址: 前端正常会直接调 /album/<key>/cover-url,
+        # 这里兜住"脚本没跑成、地址随主表单提交上来"的情况。
+        # **只在本来就没封面时抓**: 已经有图就绝不覆盖用户的选择。
+        _hint = str(text_field(values, "cover_url_hint") or "").strip()
+        if _hint:
+            _cur = self.data.get_album(key) or album
+            _has = isinstance(_cur, Mapping) and bool(_cur.get("cover_local"))
+            if not _has:
+                self._store_cover_from_url(str(key), _hint)
         if paste_missed:
             # 已经存过了: 回显必须说清"这次其它修改生效了", 否则用户会以为保存失败。
             page = T.edit_album_page(
@@ -4372,6 +4569,18 @@ class PublicSite:
         return Response.redirect(f"/album/{T.quote_segment(key)}", status=303)
 
     # -- 辅助 ---------------------------------------------------------------
+
+    def _json(self, payload: Mapping[str, Any], *, status: int = 200,
+              cookies: Sequence[str] = ()) -> Response:
+        """小 JSON 响应 —— 附图 / 封面这类前端 ``fetch`` 调用的接口用.
+
+        **不要**用它渲染页面: 页面走 :meth:`_html`。
+        """
+        body = json.dumps(dict(payload), ensure_ascii=False).encode("utf-8")
+        response = Response.binary(body, "application/json; charset=utf-8",
+                                   status=status)
+        response.cookies.extend(cookies)
+        return response
 
     def _html(self, body: str, *, status: int = 200, cookies: Sequence[str] = ()) -> Response:
         response = Response.html(body, status=status)
@@ -4940,7 +5149,12 @@ class PublicSite:
                                                 if state.session else ""),
                                    summary="新建专辑")
                 # 封面: 新建表单里的 <input type="file" name="cover">
-                self._save_album_cover_file(key, values)
+                # 没传文件但 infobox 里带了图片地址时, 服务端抓一次兜底
+                # (新建页还没有 key, 前端没法调 /cover-url)
+                if not self._save_album_cover_file(key, values):
+                    _hint = str(text_field(values, "cover_url_hint") or "").strip()
+                    if _hint:
+                        self._store_cover_from_url(key, _hint)
                 created_key = created_name = key
                 target = "/album/" + T.quote_segment(key) + "/edit"
             elif kind == "circle":
