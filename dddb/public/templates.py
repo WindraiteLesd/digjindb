@@ -551,7 +551,7 @@ def layout(
 <!-- 唯一的脚本: 同源外链, 只做渐进增强(CSP 只给 script-src 'self') -->
 <script src="/static/public.js?v=56" defer></script>
 <script src="/static/cover-crop.js?v=6" defer></script>
-<script src="/static/infobox.js?v=5" defer></script>
+<script src="/static/infobox.js?v=6" defer></script>
 </head>
 <body{_bg_attr(ctx)}>
 <a class="skip" href="#content">跳到正文</a>
@@ -5141,6 +5141,9 @@ def edit_album_page(
             '<div class="cover-form">'
             '<input type="file" name="cover" id="cover-input"'
             ' accept="image/png,image/jpeg,image/webp" class="cover-file">'
+            # infobox 里带了图片地址时, 前端把地址放这儿 —— 新建时还没有 key,
+            # 没法直接调 /cover-url, 由服务端建完专辑后兜底抓一次。
+            '<input type="hidden" name="cover_url_hint" id="cover-url-hint">'
             '<p class="cover-picked" id="cover-picked"></p>'
             '<button type="button" class="btn-ghost btn-xs cover-upload-btn"'
             ' data-cover-pick="1">上传封面</button>'
@@ -5167,6 +5170,9 @@ def edit_album_page(
             f' data-photo-del-action="/album/{esc(quote_segment(key))}/photo/del"'
             f' data-photo-note-action="/album/{esc(quote_segment(key))}/photo/note"'
             f' data-cover-token="{esc(ctx.csrf_token)}">'
+            # 抓取封面用: 前端优先直接 POST /cover-url(见 infobox.js),
+            # 这个隐藏域是兜底(比如脚本失败时随主表单提交)。
+            f'<input type="hidden" name="cover_url_hint" id="cover-url-hint">'
             f'<input type="file" name="cover" id="cover-input"'
             f' accept="image/png,image/jpeg,image/webp" class="cover-file">'
             f'<p class="cover-picked" id="cover-picked"></p>'
