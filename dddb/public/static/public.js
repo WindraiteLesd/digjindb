@@ -472,6 +472,11 @@
       Array.prototype.forEach.call(els, function (el) {
         var name = el.getAttribute("name");
         if (!name || name === "csrf_token") { return; }
+        /* cover_data 由 extra 槽单独收 —— 若也从这里收, 同一份 base64
+           会在草稿里存两遍。1MB 的图 data URL 约 1.37M 字符, 两份按
+           UTF-16 算就超过 localStorage 的 5MB 配额, setItem 直接抛异常,
+           结果整份草稿都存不下来(用户 m12486: 还是不行)。 */
+        if (name === "cover_data") { return; }
         if (el.type === "file") { return; }
         if (el.type === "checkbox" || el.type === "radio") {
           if (!el.checked) { return; }
@@ -1680,6 +1685,40 @@
      新建模式还没有 key, 封面只能随主表单一起提交, 所以不能走裁切弹窗。
      这里只做两件事: 点按钮 -> 打开文件选择; 选完 -> 左侧缩略图预览。
      ========================================================================== */
+  /* 把 data URL 缩到 maxSide 以内再转回 data URL。
+     草稿里存的是**预览**, 不需要原始画质 —— 一张 1MB 的封面 base64 后
+     1.37M 字符, 按 UTF-16 算就吃不掉 localStorage 的 5MB 配额;
+     缩到 900px 通常只有 100-250KB, 存几十张也不成问题。 */
+  function shrinkDataUrl(dataUrl, maxSide, quality) {
+    return new Promise(function (resolve) {
+      var img = new Image();
+      img.onload = function () {
+        try {
+          var w = img.naturalWidth || img.width;
+          var h = img.naturalHeight || img.height;
+          if (!w || !h) { resolve(""); return; }
+          var scale = Math.min(1, (maxSide || 900) / Math.max(w, h));
+          var cw = Math.max(1, Math.round(w * scale));
+          var ch = Math.max(1, Math.round(h * scale));
+          var canvas = document.createElement("canvas");
+          canvas.width = cw;
+          canvas.height = ch;
+          var g = canvas.getContext("2d");
+          if (!g) { resolve(""); return; }
+          g.fillStyle = "#fff";
+          g.fillRect(0, 0, cw, ch);
+          g.drawImage(img, 0, 0, cw, ch);
+          var out = canvas.toDataURL("image/jpeg", quality || 0.82);
+          resolve(String(out || ""));
+        } catch (err) {
+          resolve("");
+        }
+      };
+      img.onerror = function () { resolve(""); };
+      img.src = dataUrl;
+    });
+  }
+
   function setupCoverPick() {
     var button = document.querySelector("[data-cover-pick]");
     if (!button) { return; }
@@ -1718,14 +1757,14 @@
         img.hidden = false;
         if (word) { word.hidden = true; }
         /* 草稿要能记住选过哪张图(用户 m12280)。file input 的值存不进
-           localStorage, 所以把 data URL 也写进隐藏域 —— 它随表单一起被
-           collect() 收走, 刷新后靠它把预览重新贴回来。
+           localStorage, 所以把 data URL 也写进隐藏域, 由 extra 槽单独收。
            注意这**不是**提交封面的通路: 服务端只认 multipart 的 cover。
-           localStorage 一个源通常只有 5MB, 2MB 的图 base64 后近 2.7MB,
-           所以超过上限就不写(预览仍然显示, 只是刷新后要重新选)。 */
-        if (store) {
-          if (data.length <= 1500000) {
-            store.value = data;
+           这里先缩到 900px 再存 —— 原图 base64 动辄 1.3M 字符, 按
+           UTF-16 算直接吃掉 localStorage 大半配额, 缩完通常 100-250KB。 */
+        if (!store) { return; }
+        shrinkDataUrl(data, 900).then(function (small) {
+          if (small && small.length <= 1500000) {
+            store.value = small;
           } else {
             store.value = "";
             if (hint) {
@@ -1733,7 +1772,7 @@
             }
           }
           store.dispatchEvent(new Event("input", { bubbles: true }));
-        }
+        });
       };
       reader.readAsDataURL(file);
     });
