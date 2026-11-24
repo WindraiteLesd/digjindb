@@ -1,0 +1,158 @@
+"""草稿保存要"全": 行增删 / chip 变更 / radio 都要进草稿, 恢复要能还原。
+
+用户 m11689: 「草稿保存的字段并不全」。
+"""
+from __future__ import annotations
+
+import re
+import unittest
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+JS = ROOT / "dddb" / "public" / "static" / "public.js"
+TPL = ROOT / "dddb" / "public" / "templates.py"
+
+
+def _block(src: str, name: str) -> str:
+    """截出 `function name(...) {...}` 的完整函数体。"""
+    i = src.index("function " + name + "(")
+    depth = 0
+    started = False
+    for j in range(i, len(src)):
+        c = src[j]
+        if c == "{":
+            depth += 1
+            started = True
+        elif c == "}":
+            depth -= 1
+            if started and depth == 0:
+                return src[i:j + 1]
+    raise AssertionError("括号不配对: " + name)
+
+
+class TestDraftTriggers(unittest.TestCase):
+    """保存触发要覆盖 click 与 DOM 变更, 不能只看 input/change。"""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.src = JS.read_text(encoding="utf-8")
+        cls.body = _block(cls.src, "setupEditDraft")
+
+    def test_listens_click(self) -> None:
+        self.assertIn('form.addEventListener("click", scheduleSave)', self.body)
+
+    def test_observes_dom_changes(self) -> None:
+        self.assertIn("MutationObserver", self.body)
+        self.assertIn("childList: true", self.body)
+        self.assertIn("subtree: true", self.body)
+
+    def test_observes_guarded(self) -> None:
+        """老浏览器没有 MutationObserver, 不能直接 new。"""
+        self.assertIn('typeof window.MutationObserver === "function"', self.body)
+
+    def test_still_listens_input_and_change(self) -> None:
+        self.assertIn('form.addEventListener("input", scheduleSave)', self.body)
+        self.assertIn('form.addEventListener("change", scheduleSave)', self.body)
+
+    def test_debounce_shared(self) -> None:
+        """四个监听走同一个 scheduleSave, 各自 setTimeout 会互相覆盖。"""
+        self.assertIn("function scheduleSave()", self.body)
+        self.assertIn("window.clearTimeout(timer)", self.body)
+
+
+class TestNoSelfTriggerLoop(unittest.TestCase):
+    """状态条文字在 form 内, 写它又触发 MutationObserver -> 必须判等。"""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.body = _block(JS.read_text(encoding="utf-8"), "setupEditDraft")
+
+    def test_compares_stamp_before_writing(self) -> None:
+        self.assertIn("lastSaved", self.body)
+        self.assertIn("if (stamp === lastSaved) { return; }", self.body)
+
+    def test_stamp_excludes_timestamp(self) -> None:
+        self.assertIn('payload.indexOf(\',"at":\')', self.body)
+
+
+class TestRestoreFitsRows(unittest.TestCase):
+    """恢复要先把重复行补齐/裁掉, 否则草稿里的第 3 条词条无处可放。"""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.body = _block(JS.read_text(encoding="utf-8"), "setupEditDraft")
+
+    def test_has_fit_pair_rows(self) -> None:
+        self.assertIn("function (kind, need)", self.body)
+        self.assertIn('[data-pair-add="', self.body)
+
+    def test_fits_credit_and_url(self) -> None:
+        self.assertIn('fitPairRows("credit"', self.body)
+        self.assertIn('fitPairRows("url"', self.body)
+
+    def test_fits_discs_from_track_disc(self) -> None:
+        self.assertIn('listOf("track_disc")', self.body)
+        self.assertIn("fitDiscs(", self.body)
+        self.assertIn("fitTrackRows(", self.body)
+
+    def test_fit_track_rows_uses_add_button(self) -> None:
+        self.assertIn('[data-track-add="1"]', self.body)
+
+    def test_guards_against_infinite_loops(self) -> None:
+        self.assertIn("guard < 80", self.body)
+        self.assertIn("guard < 20", self.body)
+        self.assertIn("guard < 200", self.body)
+
+
+class TestRestoreDispatchesChange(unittest.TestCase):
+    """chip 类控件只监听 change, 恢复必须派发 change 才会重建。"""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.body = _block(JS.read_text(encoding="utf-8"), "setupEditDraft")
+
+    def test_dispatches_both_events(self) -> None:
+        self.assertIn('new Event("input", { bubbles: true })', self.body)
+        self.assertIn('new Event("change", { bubbles: true })', self.body)
+
+    def test_sets_checked_for_radio(self) -> None:
+        self.assertIn('el.type === "radio" || el.type === "checkbox"', self.body)
+        self.assertIn("el.checked = list.indexOf(el.value) !== -1", self.body)
+
+    def test_skips_file_inputs(self) -> None:
+        self.assertIn('if (el.type === "file") { return; }', self.body)
+
+    def test_removes_restore_button_after_use(self) -> None:
+        self.assertIn("restore.parentNode.removeChild(restore)", self.body)
+
+
+class TestCreditNameChangeRebuildsChips(unittest.TestCase):
+    """草稿恢复写 credit_name 后, 行内 chip 要真的出现。"""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.src = JS.read_text(encoding="utf-8")
+        cls.body = _block(cls.src, "setupCreditPeople")
+
+    def test_has_add_chip_only(self) -> None:
+        self.assertIn("function addChipOnly(row, name)", self.body)
+
+    def test_listens_change_on_credit_name(self) -> None:
+        self.assertIn('addEventListener("change"', self.body)
+        self.assertIn('t.name !== "credit_name"', self.body)
+
+    def test_rebuilds_after_external_write(self) -> None:
+        self.assertIn("rebuildSummary()", self.body)
+        self.assertIn("split(/[\\n、]+/)", self.body)
+
+
+class TestVersionBumped(unittest.TestCase):
+    def test_public_js_version(self) -> None:
+        text = TPL.read_text(encoding="utf-8")
+        m = re.search(r"public\.js\?v=(\d+)", text)
+        self.assertIsNotNone(m)
+        self.assertGreaterEqual(int(m.group(1)), 58)
+
+
+if __name__ == "__main__":
+    unittest.main()
