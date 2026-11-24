@@ -3256,6 +3256,60 @@ body.crop-open { overflow: hidden; }
   font-size: 12px;
 }
 
+/* 新建专辑: 没有封面时那一格是**加号上传按钮**(用户 m13494:
+   原来只显示"新建"两个字, 完全看不出能点)。 */
+.cover-add-thumb {
+  display: flex; align-items: center; justify-content: center;
+  position: relative; cursor: pointer;
+}
+.cover-add-thumb .cover-plus {
+  font-size: 30px; line-height: 1; opacity: .55;
+}
+.cover-add-thumb:hover .cover-plus {
+  opacity: 1; color: var(--accent, #4f8cff);
+}
+.cover-add-thumb:focus-visible {
+  outline: 2px solid var(--accent, #4f8cff); outline-offset: 2px;
+}
+.cover-add-thumb .cover-preview-img {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  object-fit: cover; border-radius: 8px;
+}
+
+/* 新建页的「其他照片」: 与编辑页同样的网格 */
+.cover-slots-local { margin-top: 10px; }
+.photo-list {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 10px; margin-top: 10px;
+}
+.photo-list:empty { display: none; }
+
+/* 草稿历史面板(m13494: 可回到某个时段的草稿版本) */
+.draft-history-panel {
+  flex: 1 1 100%; margin-top: 8px; padding: 8px 10px;
+  border: 1px solid var(--line, #2a2f3a); border-radius: 8px;
+  max-height: 260px; overflow: auto;
+}
+.draft-history-panel[hidden] { display: none; }
+.draft-history-title { font-size: 12px; opacity: .75; margin-bottom: 6px; }
+.draft-history-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 3px 0; font-size: 12px;
+}
+.draft-history-when {
+  flex: 1 1 auto; opacity: .8; font-variant-numeric: tabular-nums;
+}
+
+/* 合并专辑: 与删除一样在主表单之外, 单独一行表单 */
+#merge-album-form {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+  margin: 16px 0 0; padding: 12px 14px;
+  border: 1px dashed var(--line, #2a2f3a); border-radius: 10px;
+}
+#merge-album-form .field-label { font-size: 12px; opacity: .8; }
+#merge-album-form input[type="text"] { flex: 1 1 260px; min-width: 0; }
+#merge-album-form .field-hint { flex: 1 1 100%; margin: 0; }
+
 /* 裁切弹窗的 1:1 锁定开关 */
 .crop-square {
   display: flex; align-items: center; gap: 7px;
