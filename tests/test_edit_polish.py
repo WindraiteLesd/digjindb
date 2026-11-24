@@ -70,13 +70,16 @@ class TestPersonChipWithRole(unittest.TestCase):
         self.assertIn('data-role=""', self.chips)
         self.assertIn(">艺人<", self.chips)
 
-    def test_js_adds_chip_on_role_enter(self) -> None:
+    def test_role_change_refreshes_summary(self) -> None:
+        """职责改了 -> 上方只读汇总重建(不再往上方"生成按钮")."""
         js = _js()
-        self.assertIn("function addRoleChip(", js)
-        self.assertIn('input.name === "credit_role"', js,
-                      "职责框回车要触发")
+        self.assertIn("function rebuildSummary(", js)
+        self.assertIn('t.name !== "credit_role"', js,
+                      "职责框改动要触发汇总刷新")
         # 生成的 chip 带 role
-        self.assertIn('chip.setAttribute("data-role", roleText)', js)
+        self.assertIn('chip.setAttribute("data-role", roles[name]', js)
+        self.assertNotIn("function addRoleChip(", js,
+                         "上方已无添加入口(m11474)")
 
     def test_js_person_input_enter(self) -> None:
         """人员输入框回车也要生成按钮。"""
