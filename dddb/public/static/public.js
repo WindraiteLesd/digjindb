@@ -487,19 +487,37 @@
     }
 
     var lastSaved = "";
+    /* 页面刚加载时 setupBindFields / setupPeopleChips 等会重建 chip、
+       改写隐藏域 —— 这些 DOM 变更会被下面的 MutationObserver 看到。
+       如果照着「变更就存」, 载入 1.2 秒后就会用**页面原值**把上一份
+       草稿整个覆盖掉, 表现就是「刷新后草稿没了」(用户 m12045)。
+       所以只有用户真的动过表单(dirty)才允许写盘。 */
+    var dirty = false;
+
+    function snapshotOf(values) {
+      try {
+        return JSON.stringify({ action: action, values: values });
+      } catch (err) {
+        return "";
+      }
+    }
 
     function save() {
-      var payload;
+      if (!dirty) { return; }
+      var values;
       try {
-        payload = JSON.stringify({ action: action, at: Date.now(), values: collect() });
+        values = collect();
       } catch (err) { return; }
-      /* 值没变就不写、也不动状态条 —— 状态条在表单里, 改它的文字会再次
-         触发 MutationObserver, 不判等就会变成每 1.2 秒自我触发的死循环。 */
-      var stamp = payload.slice(0, payload.indexOf(',"at":'));
-      if (stamp === lastSaved) { return; }
+      /* 指纹只取「值」: 之前误用 payload.slice(0, indexOf(',"at":')),
+         而 JSON 键序是 action / at / values, 切出来只剩 action ——
+         第一次保存之后指纹永远相同, 后续修改全被跳过(m12045)。 */
+      var stamp = snapshotOf(values);
+      if (!stamp || stamp === lastSaved) { return; }
       lastSaved = stamp;
       try {
-        window.localStorage.setItem(KEY, payload);
+        window.localStorage.setItem(KEY, JSON.stringify({
+          action: action, at: Date.now(), values: values
+        }));
         if (bar) {
           bar.textContent = "草稿已自动保存 " + new Date().toLocaleTimeString();
         }
@@ -511,17 +529,44 @@
       timer = window.setTimeout(save, 1200);
     }
 
-    form.addEventListener("input", scheduleSave);
-    form.addEventListener("change", scheduleSave);
+    /* 只有**用户真的改过**才允许写盘: 载入时 setupBindFields /
+       setupPeopleChips 会重建 chip、改写隐藏域, 那些 DOM 变更同样会命中
+       MutationObserver。若照着"变更就存", 1.2 秒后就会用页面原值把上一份
+       草稿覆盖掉 —— 表现正是「刷新后草稿丢失」(用户 m12045)。 */
+    function markDirty() {
+      dirty = true;
+      scheduleSave();
+    }
+
+    function onMutation() {
+      if (dirty) { scheduleSave(); }
+    }
+
+    form.addEventListener("input", markDirty);
+    form.addEventListener("change", markDirty);
     /* 行增删 / chip 增删都不派发 input|change(它们直接改 DOM 与隐藏域),
        只监听这两个事件的话「点了＋添加词条 / ＋添加歌曲」之后的内容根本没进草稿
-       (用户 m11689: 草稿保存的字段并不全)。所以再加 click 与 DOM 变更兜住。 */
-    form.addEventListener("click", scheduleSave);
+       (用户 m11689: 草稿保存的字段并不全)。所以再加 click/keydown/drop 兜住。 */
+    form.addEventListener("click", markDirty);
+    form.addEventListener("keydown", markDirty);
+    form.addEventListener("drop", markDirty);
     if (typeof window.MutationObserver === "function") {
-      new window.MutationObserver(scheduleSave).observe(form, {
+      new window.MutationObserver(onMutation).observe(form, {
         childList: true, subtree: true
       });
     }
+    /* 防抖 1.2 秒 + 打完字立刻刷新 = 草稿还没落地。离开页面前补一次同步写盘。 */
+    window.addEventListener("beforeunload", save);
+    document.addEventListener("visibilitychange", function () {
+      if (document.visibilityState === "hidden") { save(); }
+    });
+    /* 真正提交了就不该再留着草稿: 保存成功会跳转, 失败也会带着提交值
+       重新渲染这一页(那次加载会因为"草稿与页面一致"自动清掉)。 */
+    form.addEventListener("submit", function () {
+      try { window.localStorage.removeItem(KEY); } catch (err) { /* 忽略 */ }
+      lastSaved = "";
+      dirty = false;
+    });
 
     // 有草稿就提示恢复(不自动套用)
     try {
@@ -530,6 +575,17 @@
       var saved = JSON.parse(raw);
       if (!saved || saved.action !== action || !saved.values) { return; }
       if (!bar) { return; }
+      /* 草稿和页面当前值一样时不必提示 —— 通常是刚保存完又回到编辑页,
+         提示了反而让人以为有没提交的改动。 */
+      var same = false;
+      try {
+        same = JSON.stringify(saved.values) === JSON.stringify(collect());
+      } catch (err) { same = false; }
+      if (same) {
+        try { window.localStorage.removeItem(KEY); } catch (err2) { /* 忽略 */ }
+        bar.textContent = "编辑内容会自动存草稿";
+        return;
+      }
       bar.textContent = "发现 " + new Date(saved.at).toLocaleTimeString() +
                         " 的草稿";
       var restore = document.createElement("button");
