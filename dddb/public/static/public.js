@@ -458,11 +458,38 @@
      * 只存**表单值**, 不提交到服务器
      * 打开页面时如果有草稿, 提示可恢复(不自动覆盖, 避免冲掉别人的修改)
      ========================================================================== */
+  /* 提交之后, 草稿什么时候才算"用掉了"?
+     只有**真的落地到了别的页面**(详情页 / 新建成功的 ?created=1)才算 —— 那时
+     页面上没有 form.edit-form 了。若还停在编辑表单上, 说明保存失败或校验没过,
+     草稿必须原样留着(用户 m13494: 500 退回后草稿丢了, 也没法恢复)。 */
+  function settlePendingDraft() {
+    if (typeof window.localStorage === "undefined") { return; }
+    var KEY = "dddb:edit-draft";
+    var PENDING = KEY + ":pending";
+    var pending = null;
+    try { pending = window.localStorage.getItem(PENDING); } catch (err) { return; }
+    if (!pending) { return; }
+    /* 还在编辑表单上 -> 没走成, 清掉标记(草稿留着, 下次照样能恢复) */
+    if (document.querySelector("form.edit-form")) {
+      try { window.localStorage.removeItem(PENDING); } catch (err) { /* 忽略 */ }
+      return;
+    }
+    var path = window.location.pathname || "";
+    var query = window.location.search || "";
+    var landed = query.indexOf("created=1") >= 0 || /^\/album\/[^/]+$/.test(path);
+    try {
+      window.localStorage.removeItem(PENDING);
+      if (landed) { window.localStorage.removeItem(KEY); }
+    } catch (err) { /* 忽略 */ }
+  }
+
   function setupEditDraft() {
     var form = document.querySelector("form.edit-form");
     var bar = document.querySelector("[data-draft-bar] .draft-status");
     if (!form || typeof window.localStorage === "undefined") { return; }
     var KEY = "dddb:edit-draft";
+    /* 提交后"待确认"标记: 见 form 的 submit 监听与 settlePendingDraft() */
+    var PENDING_KEY = KEY + ":pending";
     var action = form.getAttribute("action") || "";
     var timer = null;
 
@@ -509,136 +536,12 @@
       cover.dispatchEvent(new Event("change", { bubbles: true }));
     }
 
-    var lastSaved = "";
-    /* 页面刚加载时 setupBindFields / setupPeopleChips 等会重建 chip、
-       改写隐藏域 —— 这些 DOM 变更会被下面的 MutationObserver 看到。
-       如果照着「变更就存」, 载入 1.2 秒后就会用**页面原值**把上一份
-       草稿整个覆盖掉, 表现就是「刷新后草稿没了」(用户 m12045)。
-       所以只有用户真的动过表单(dirty)才允许写盘。 */
-    var dirty = false;
-
-    function snapshotOf(values, extra) {
-      try {
-        return JSON.stringify({ action: action, values: values, extra: extra });
-      } catch (err) {
-        return "";
-      }
-    }
-
-    function save(force) {
-      /* force: 用户点了「保存草稿」按钮 —— 那是明确意图, 不受 dirty 闸门限制
-         (比如刚打开页面什么都没改, 也想把当前内容留一份)。 */
-      if (!force && !dirty) { return; }
-      var values, extra;
-      try {
-        values = collect();
-        extra = collectExtra();
-      } catch (err) { return; }
-      /* 指纹只取「值」: 之前误用 payload.slice(0, indexOf(',"at":')),
-         而 JSON 键序是 action / at / values, 切出来只剩 action ——
-         第一次保存之后指纹永远相同, 后续修改全被跳过(m12045)。 */
-      var stamp = snapshotOf(values, extra);
-      if (!force && (!stamp || stamp === lastSaved)) { return; }
-      lastSaved = stamp;
-      dirty = false;
-      try {
-        window.localStorage.setItem(KEY, JSON.stringify({
-          action: action, at: Date.now(), values: values, extra: extra
-        }));
-        if (bar) {
-          bar.textContent = "草稿已保存 " + new Date().toLocaleTimeString();
-        }
-        return true;
-      } catch (err) {
-        /* 隐私模式 / 超限: 静默 */
-        return false;
-      }
-    }
-
-    function scheduleSave() {
-      if (timer) { window.clearTimeout(timer); }
-      timer = window.setTimeout(save, 1200);
-    }
-
-    /* 只有**用户真的改过**才允许写盘: 载入时 setupBindFields /
-       setupPeopleChips 会重建 chip、改写隐藏域, 那些 DOM 变更同样会命中
-       MutationObserver。若照着"变更就存", 1.2 秒后就会用页面原值把上一份
-       草稿覆盖掉 —— 表现正是「刷新后草稿丢失」(用户 m12045)。 */
-    function markDirty() {
-      dirty = true;
-      scheduleSave();
-    }
-
-    function onMutation() {
-      if (dirty) { scheduleSave(); }
-    }
-
-    form.addEventListener("input", markDirty);
-    form.addEventListener("change", markDirty);
-    /* 行增删 / chip 增删都不派发 input|change(它们直接改 DOM 与隐藏域),
-       只监听这两个事件的话「点了＋添加词条 / ＋添加歌曲」之后的内容根本没进草稿
-       (用户 m11689: 草稿保存的字段并不全)。所以再加 click/keydown/drop 兜住。 */
-    form.addEventListener("click", markDirty);
-    form.addEventListener("keydown", markDirty);
-    form.addEventListener("drop", markDirty);
-    if (typeof window.MutationObserver === "function") {
-      new window.MutationObserver(onMutation).observe(form, {
-        childList: true, subtree: true
-      });
-    }
-    /* 防抖 1.2 秒 + 打完字立刻刷新 = 草稿还没落地。离开页面前补一次同步写盘。
-       注意要包一层调用: 直接把 save 交给 addEventListener 会把 Event 当成
-       force 传进去, 于是每次离开页面都无条件写盘(没改过也写)。 */
-    window.addEventListener("beforeunload", function () { save(false); });
-    document.addEventListener("visibilitychange", function () {
-      if (document.visibilityState === "hidden") { save(false); }
-    });
-    /* 真正提交了就不该再留着草稿: 保存成功会跳转, 失败也会带着提交值
-       重新渲染这一页(那次加载会因为"草稿与页面一致"自动清掉)。 */
-    form.addEventListener("submit", function () {
-      try { window.localStorage.removeItem(KEY); } catch (err) { /* 忽略 */ }
-      lastSaved = "";
-      dirty = false;
-    });
-
-    /* 手动「保存草稿」: 不必等 1.2 秒防抖, 也不用先改过东西。 */
-    var saveBtn = document.querySelector("[data-draft-save]");
-    if (saveBtn) {
-      saveBtn.addEventListener("click", function (e) {
-        e.preventDefault();
-        if (timer) { window.clearTimeout(timer); timer = null; }
-        if (!save(true) && bar) { bar.textContent = "保存草稿失败(浏览器不允许本地存储)"; }
-      });
-    }
-
-    // 有草稿就提示恢复(不自动套用)
-    try {
-      var raw = window.localStorage.getItem(KEY);
-      if (!raw) { return; }
-      var saved = JSON.parse(raw);
-      if (!saved || saved.action !== action || !saved.values) { return; }
-      if (!bar) { return; }
-      /* 草稿和页面当前值一样时不必提示 —— 通常是刚保存完又回到编辑页,
-         提示了反而让人以为有没提交的改动。 */
-      var same = false;
-      try {
-        same = snapshotOf(collect(), collectExtra()) ===
-               snapshotOf(saved.values, saved.extra);
-      } catch (err) { same = false; }
-      if (same) {
-        try { window.localStorage.removeItem(KEY); } catch (err2) { /* 忽略 */ }
-        bar.textContent = "编辑内容会自动存草稿";
-        return;
-      }
-      bar.textContent = "发现 " + new Date(saved.at).toLocaleTimeString() +
-                        " 的草稿";
-      var restore = document.createElement("button");
-      restore.type = "button";
-      restore.className = "btn-ghost btn-xs";
-      restore.textContent = "恢复草稿";
-      restore.addEventListener("click", function (e) {
-        e.preventDefault();
-        var values = saved.values || {};
+    /* 把一份草稿(或历史版本)灌回表单。抽成函数是因为「恢复草稿」按钮和
+       「草稿历史」面板都要用 —— 两处各写一遍的话, 行的重建逻辑迟早走偏。
+       顺序很重要: 先把重复行(词条/外链/曲目/碟)补齐或裁掉, 再逐字段写值,
+       否则草稿里第 3 条词条在页面上只有 2 行时无处可放(用户 m11689)。 */
+    function applyDraft(saved, note) {
+        var values = (saved && saved.values) || {};
         var listOf = function (name) {
           var raw = values[name];
           if (raw === undefined || raw === null) { return []; }
@@ -759,8 +662,264 @@
             el.dispatchEvent(new Event("change", { bubbles: true }));
           });
         });
-        bar.textContent = "草稿已恢复";
+        bar.textContent = note || "草稿已恢复";
         applyExtra(saved.extra);
+    }
+
+    var lastSaved = "";
+    /* 页面刚加载时 setupBindFields / setupPeopleChips 等会重建 chip、
+       改写隐藏域 —— 这些 DOM 变更会被下面的 MutationObserver 看到。
+       如果照着「变更就存」, 载入 1.2 秒后就会用**页面原值**把上一份
+       草稿整个覆盖掉, 表现就是「刷新后草稿没了」(用户 m12045)。
+       所以只有用户真的动过表单(dirty)才允许写盘。 */
+    var dirty = false;
+
+    function snapshotOf(values, extra) {
+      try {
+        return JSON.stringify({ action: action, values: values, extra: extra });
+      } catch (err) {
+        return "";
+      }
+    }
+
+    /* ---- 草稿版本历史(用户 m13494) ------------------------------------
+       每次草稿内容真的变了就留一份快照, 最多 HISTORY_MAX 份。用途很具体:
+       报错回到编辑页时草稿可能被后续操作覆盖掉, 有个历史就能"回到某个时段"。
+       与 KEY 分开存, 所以历史本身不会被"覆盖草稿"的动作抹掉。 */
+    var HISTORY_KEY = KEY + ":history";
+    var HISTORY_MAX = 20;
+
+    function draftFingerprint(values, extra) {
+      try { return JSON.stringify([values, extra]); } catch (err) { return ""; }
+    }
+
+    function readHistory() {
+      try {
+        var rows = window.localStorage.getItem(HISTORY_KEY);
+        var list = rows ? JSON.parse(rows) : [];
+        if (!Array.isArray(list)) { return []; }
+        return list.filter(function (one) {
+          return one && one.values && one.action === action;
+        });
+      } catch (err) { return []; }
+    }
+
+    function writeHistory(list) {
+      try {
+        window.localStorage.setItem(HISTORY_KEY, JSON.stringify(list));
+        return true;
+      } catch (err) { return false; }
+    }
+
+    function pushHistory(values, extra) {
+      var stamp = draftFingerprint(values, extra);
+      if (!stamp) { return; }
+      var list = readHistory();
+      if (list.length && list[0].stamp === stamp) { return; }
+      list.unshift({
+        at: Date.now(), action: action, stamp: stamp,
+        values: values, extra: extra
+      });
+      /* 配额有限: 攒到 MAX 就丢最老的; 仍写不进去就再砍一半重试一次。 */
+      while (list.length > HISTORY_MAX) { list.pop(); }
+      if (!writeHistory(list) && list.length > 4) {
+        writeHistory(list.slice(0, Math.ceil(list.length / 2)));
+      }
+    }
+
+    function formatWhen(at) {
+      try {
+        return new Date(at).toLocaleString();
+      } catch (err) { return ""; }
+    }
+
+    function save(force) {
+      /* force: 用户点了「保存草稿」按钮 —— 那是明确意图, 不受 dirty 闸门限制
+         (比如刚打开页面什么都没改, 也想把当前内容留一份)。 */
+      if (!force && !dirty) { return; }
+      var values, extra;
+      try {
+        values = collect();
+        extra = collectExtra();
+      } catch (err) { return; }
+      /* 指纹只取「值」: 之前误用 payload.slice(0, indexOf(',"at":')),
+         而 JSON 键序是 action / at / values, 切出来只剩 action ——
+         第一次保存之后指纹永远相同, 后续修改全被跳过(m12045)。 */
+      var stamp = snapshotOf(values, extra);
+      if (!force && (!stamp || stamp === lastSaved)) { return; }
+      lastSaved = stamp;
+      dirty = false;
+      pushHistory(values, extra);
+      try {
+        window.localStorage.setItem(KEY, JSON.stringify({
+          action: action, at: Date.now(), values: values, extra: extra
+        }));
+        if (bar) {
+          bar.textContent = "草稿已保存 " + new Date().toLocaleTimeString();
+        }
+        return true;
+      } catch (err) {
+        /* 隐私模式 / 超限: 静默 */
+        return false;
+      }
+    }
+
+    function scheduleSave() {
+      if (timer) { window.clearTimeout(timer); }
+      timer = window.setTimeout(save, 1200);
+    }
+
+    /* 只有**用户真的改过**才允许写盘: 载入时 setupBindFields /
+       setupPeopleChips 会重建 chip、改写隐藏域, 那些 DOM 变更同样会命中
+       MutationObserver。若照着"变更就存", 1.2 秒后就会用页面原值把上一份
+       草稿覆盖掉 —— 表现正是「刷新后草稿丢失」(用户 m12045)。 */
+    function markDirty() {
+      dirty = true;
+      scheduleSave();
+    }
+
+    function onMutation() {
+      if (dirty) { scheduleSave(); }
+    }
+
+    form.addEventListener("input", markDirty);
+    form.addEventListener("change", markDirty);
+    /* 行增删 / chip 增删都不派发 input|change(它们直接改 DOM 与隐藏域),
+       只监听这两个事件的话「点了＋添加词条 / ＋添加歌曲」之后的内容根本没进草稿
+       (用户 m11689: 草稿保存的字段并不全)。所以再加 click/keydown/drop 兜住。 */
+    form.addEventListener("click", markDirty);
+    form.addEventListener("keydown", markDirty);
+    form.addEventListener("drop", markDirty);
+    if (typeof window.MutationObserver === "function") {
+      new window.MutationObserver(onMutation).observe(form, {
+        childList: true, subtree: true
+      });
+    }
+    /* 防抖 1.2 秒 + 打完字立刻刷新 = 草稿还没落地。离开页面前补一次同步写盘。
+       注意要包一层调用: 直接把 save 交给 addEventListener 会把 Event 当成
+       force 传进去, 于是每次离开页面都无条件写盘(没改过也写)。 */
+    window.addEventListener("beforeunload", function () { save(false); });
+    document.addEventListener("visibilitychange", function () {
+      if (document.visibilityState === "hidden") { save(false); }
+    });
+    /* 真正提交了就不该再留着草稿: 保存成功会跳转, 失败也会带着提交值
+       重新渲染这一页(那次加载会因为"草稿与页面一致"自动清掉)。 */
+    /* 提交时**不能**直接删草稿(用户 m13494: 报错退回编辑页后草稿没了,
+       而且没有恢复入口)。这里只留一个"待确认"标记, 等真的落地到详情页
+       (页面上没有编辑表单了) 才清 —— 见 settlePendingDraft()。 */
+    form.addEventListener("submit", function () {
+      try {
+        window.localStorage.setItem(PENDING_KEY, JSON.stringify({
+          action: action, at: Date.now()
+        }));
+      } catch (err) { /* 隐私模式 */ }
+    });
+
+    /* 手动「保存草稿」: 不必等 1.2 秒防抖, 也不用先改过东西。 */
+    var saveBtn = document.querySelector("[data-draft-save]");
+    if (saveBtn) {
+      saveBtn.addEventListener("click", function (e) {
+        e.preventDefault();
+        if (timer) { window.clearTimeout(timer); timer = null; }
+        if (!save(true) && bar) { bar.textContent = "保存草稿失败(浏览器不允许本地存储)"; }
+      });
+    }
+
+    /* ---- 草稿历史面板 ---------------------------------------------------
+       用户 m13494: "建立历史草稿版本记录功能, 可恢复到某个时段草稿版本"。
+       历史由 pushHistory() 在每次存草稿时留底, 这里只负责把它列出来。 */
+    function buildHistoryPanel() {
+      var btn = document.querySelector("[data-draft-history]");
+      if (!btn) { return; }
+      var panel = document.createElement("div");
+      panel.className = "draft-history-panel";
+      panel.hidden = true;
+
+      function render() {
+        var list = readHistory();
+        panel.textContent = "";
+        var head = document.createElement("div");
+        head.className = "draft-history-title";
+        head.textContent = list.length
+          ? "草稿历史（选一份恢复，共 " + list.length + " 份）"
+          : "还没有历史版本";
+        panel.appendChild(head);
+        list.forEach(function (entry, index) {
+          var row = document.createElement("div");
+          row.className = "draft-history-row";
+          var when = document.createElement("span");
+          when.className = "draft-history-when";
+          when.textContent = formatWhen(entry.at);
+          row.appendChild(when);
+
+          var back = document.createElement("button");
+          back.type = "button";
+          back.className = "btn-ghost btn-xs";
+          back.textContent = "恢复";
+          back.addEventListener("click", function (e) {
+            e.preventDefault();
+            applyDraft(entry, "已恢复到 " + formatWhen(entry.at));
+            panel.hidden = true;
+          });
+          row.appendChild(back);
+
+          var drop = document.createElement("button");
+          drop.type = "button";
+          drop.className = "btn-ghost btn-xs";
+          drop.textContent = "删除";
+          drop.addEventListener("click", function (e) {
+            e.preventDefault();
+            var rest = readHistory().filter(function (_, i) { return i !== index; });
+            if (writeHistory(rest)) { render(); }
+          });
+          row.appendChild(drop);
+          panel.appendChild(row);
+        });
+        var hint = document.createElement("p");
+        hint.className = "field-hint";
+        hint.textContent = "历史版本存在本机浏览器里，最多保留最近 " +
+                           HISTORY_MAX + " 份。";
+        panel.appendChild(hint);
+      }
+
+      btn.addEventListener("click", function (e) {
+        e.preventDefault();
+        render();
+        panel.hidden = !panel.hidden;
+      });
+      if (bar && bar.parentNode) { bar.parentNode.appendChild(panel); }
+      else { btn.parentNode.appendChild(panel); }
+    }
+    buildHistoryPanel();
+
+    // 有草稿就提示恢复(不自动套用)
+    try {
+      var raw = window.localStorage.getItem(KEY);
+      if (!raw) { return; }
+      var saved = JSON.parse(raw);
+      if (!saved || saved.action !== action || !saved.values) { return; }
+      if (!bar) { return; }
+      /* 草稿和页面当前值一样时不必提示 —— 通常是刚保存完又回到编辑页,
+         提示了反而让人以为有没提交的改动。 */
+      var same = false;
+      try {
+        same = snapshotOf(collect(), collectExtra()) ===
+               snapshotOf(saved.values, saved.extra);
+      } catch (err) { same = false; }
+      if (same) {
+        try { window.localStorage.removeItem(KEY); } catch (err2) { /* 忽略 */ }
+        bar.textContent = "编辑内容会自动存草稿";
+        return;
+      }
+      bar.textContent = "发现 " + new Date(saved.at).toLocaleTimeString() +
+                        " 的草稿";
+      var restore = document.createElement("button");
+      restore.type = "button";
+      restore.className = "btn-ghost btn-xs";
+      restore.textContent = "恢复草稿";
+      restore.addEventListener("click", function (e) {
+        e.preventDefault();
+        applyDraft(saved, "草稿已恢复");
         if (restore.parentNode) { restore.parentNode.removeChild(restore); }
       });
       bar.parentNode.appendChild(restore);
@@ -1756,9 +1915,106 @@
     });
   }
 
+  /* 新建专辑页的「其他照片」(用户 m13494: 编辑页有, 新建页也该有)。
+     新建时还没有 key, 走不了 /album/<key>/photo 那套异步上传 —— 所以这里只做
+     三件事: 选图 -> 缩到 900px 存成 data URL -> 连同备注塞进隐藏域
+     photos_data, 随主表单一起提交(服务端 _save_new_photos 再落盘)。 */
+  function setupLocalPhotos() {
+    var host = document.querySelector("[data-photo-local]");
+    var input = document.getElementById("photo-input");
+    var store = document.getElementById("photos-data");
+    var list = document.querySelector("[data-photo-list]");
+    if (!host || !input || !store || !list) { return; }
+    var addBtn = host.querySelector("[data-photo-add]");
+    var MAX = 12;
+    var items = [];
+
+    function sync() {
+      try {
+        store.value = items.length ? JSON.stringify(items) : "";
+      } catch (err) { store.value = ""; }
+      /* 草稿与脏标记都靠事件, 这里手动派发一次 */
+      store.dispatchEvent(new Event("input", { bubbles: true }));
+      store.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+
+    function render() {
+      list.textContent = "";
+      items.forEach(function (item, index) {
+        var card = document.createElement("div");
+        card.className = "photo-card photo-card-local";
+        var img = document.createElement("img");
+        img.className = "photo-thumb";
+        img.alt = "";
+        img.src = item.data;
+        card.appendChild(img);
+
+        var note = document.createElement("input");
+        note.className = "input photo-note";
+        note.type = "text";
+        note.placeholder = "备注(可留空)";
+        note.value = item.note || "";
+        note.addEventListener("input", function () {
+          if (items[index]) { items[index].note = note.value; }
+          sync();
+        });
+        card.appendChild(note);
+
+        var del = document.createElement("button");
+        del.type = "button";
+        del.className = "btn-ghost btn-xs photo-del";
+        del.textContent = "×";
+        del.title = "移除这张";
+        del.addEventListener("click", function (e) {
+          e.preventDefault();
+          items.splice(index, 1);
+          render();
+          sync();
+        });
+        card.appendChild(del);
+        list.appendChild(card);
+      });
+      if (addBtn) { addBtn.hidden = items.length >= MAX; }
+    }
+
+    function addFiles(files) {
+      Array.prototype.forEach.call(files, function (file) {
+        if (!file || items.length >= MAX) { return; }
+        if (file.size > 2 * 1024 * 1024) { return; }
+        if (String(file.type || "").indexOf("image/") !== 0) { return; }
+        var reader = new FileReader();
+        reader.onload = function () {
+          var raw = String(reader.result || "");
+          if (!raw) { return; }
+          shrinkDataUrl(raw, 900).then(function (small) {
+            items.push({ data: small || raw, note: "" });
+            render();
+            sync();
+          });
+        };
+        reader.readAsDataURL(file);
+      });
+    }
+
+    if (addBtn) {
+      addBtn.addEventListener("click", function (e) {
+        e.preventDefault();
+        input.click();
+      });
+    }
+    input.addEventListener("change", function () {
+      /* 先拷贝一份再清空 input: 直接传 live 的 FileList, 清空后就读不到了 */
+      addFiles(Array.prototype.slice.call(input.files || []));
+      input.value = "";
+    });
+  }
+
   function setupCoverPick() {
-    var button = document.querySelector("[data-cover-pick]");
-    if (!button) { return; }
+    /* 入口可能有多个: 「上传封面」小按钮 + 新建页那个大方块(没图时就是加号)。
+       以前只取第一个匹配, 新建页的大方块点不动(用户 m13494)。 */
+    var buttons = Array.prototype.slice.call(
+      document.querySelectorAll("[data-cover-pick]"));
+    if (!buttons.length) { return; }
     var input = document.getElementById("cover-input");
     var hint = document.getElementById("cover-picked");
     var thumb = document.querySelector(".cover-fallback");
@@ -1767,9 +2023,18 @@
     var store = document.getElementById("cover-data");
     if (!input) { return; }
 
-    button.addEventListener("click", function (e) {
-      e.preventDefault();
-      input.click();
+    buttons.forEach(function (btn) {
+      btn.addEventListener("click", function (e) {
+        e.preventDefault();
+        input.click();
+      });
+      /* 那个大方块是 div[role=button], 键盘也要能开(无障碍) */
+      btn.addEventListener("keydown", function (e) {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          input.click();
+        }
+      });
     });
 
     input.addEventListener("change", function () {
@@ -2317,6 +2582,102 @@
     }
   }
 
+  /* 外链名自动识别: 填完网址(或粘贴整段 embed code)后, 按域名认一个标准名
+     (Apple Music / SoundCloud / Spotify / X (Twitter) / Embed Link (Youtube) ...)。
+     规则见 dddb/public/linknames.py —— 服务端把名字表塞进 #dl-url_key 的
+     option 里, 这里只按**域名后缀**做匹配, 保证两边一致。
+     只在链接名为空时填, 绝不覆盖用户自己写的名字(用户 m13077)。 */
+  function setupLinkAutoName() {
+    function hostOf(value) {
+      var text = String(value || "").trim();
+      if (!text) { return ""; }
+      if (text.indexOf("//") < 0) { text = "https://" + text.replace(/^\/+/, ""); }
+      try { return (new URL(text)).hostname.toLowerCase().replace(/\.$/, ""); }
+      catch (e) { return ""; }
+    }
+    // 与 linknames.LINK_NAME_RULES 同序(长后缀在前)
+    var RULES = [
+      ["music.apple.com", "Apple Music"],
+      ["open.spotify.com", "Spotify"],
+      ["play.spotify.com", "Spotify"],
+      ["on.soundcloud.com", "SoundCloud"],
+      ["soundcloud.com", "SoundCloud"],
+      ["music.youtube.com", "YouTube"],
+      ["youtube-nocookie.com", "YouTube"],
+      ["youtu.be", "YouTube"],
+      ["youtube.com", "YouTube"],
+      ["x.com", "X (Twitter)"],
+      ["twitter.com", "X (Twitter)"],
+      ["bandcamp.com", "Bandcamp"],
+      ["nicovideo.jp", "niconico"],
+      ["nico.ms", "niconico"],
+      ["bilibili.com", "bilibili"],
+      ["instagram.com", "Instagram"],
+      ["booth.pm", "BOOTH"],
+      ["melonbooks.co.jp", "Melonbooks"],
+      ["amazon.co.jp", "Amazon"],
+      ["amazon.com", "Amazon"],
+      ["linktr.ee", "linktr.ee"],
+      ["lit.link", "lit.link"],
+      ["note.com", "note"],
+      ["tunecore.co.jp", "TuneCore"],
+      ["diverse.direct", "DIVERSE DIRECT"]
+    ];
+    function guess(value) {
+      var text = String(value || "").trim();
+      if (!text) { return ""; }
+      // 整段 embed code: iframe 里出现的平台字样
+      if (/<iframe\b/i.test(text)) {
+        var low = text.toLowerCase();
+        if (low.indexOf("soundcloud") >= 0) { return "Embed Link (SoundCloud)"; }
+        if (low.indexOf("youtu") >= 0) { return "Embed Link (Youtube)"; }
+        return "";
+      }
+      var host = hostOf(text);
+      if (!host) { return ""; }
+      for (var i = 0; i < RULES.length; i++) {
+        var suffix = RULES[i][0];
+        if (host === suffix || host.slice(-(suffix.length + 1)) === "." + suffix) {
+          return RULES[i][1];
+        }
+      }
+      return "";
+    }
+    function fill(row) {
+      if (!row) { return; }
+      var urlInput = row.querySelector('input[name="url_value"]');
+      var keyInput = row.querySelector('input[name="url_key"]');
+      if (!urlInput || !keyInput) { return; }
+      if (String(keyInput.value || "").trim()) { return; }   // 用户填过就别动
+      var name = guess(urlInput.value);
+      if (!name) { return; }
+      keyInput.value = name;
+      keyInput.dispatchEvent(new Event("input", { bubbles: true }));
+      keyInput.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+    function rowOf(el) {
+      return el && el.closest ? el.closest('[data-pair-row="url"]') : null;
+    }
+    document.addEventListener("focusout", function (e) {
+      var t = e.target;
+      if (!t || !t.getAttribute || t.getAttribute("name") !== "url_value") { return; }
+      fill(rowOf(t));
+    });
+    document.addEventListener("change", function (e) {
+      var t = e.target;
+      if (!t || !t.getAttribute || t.getAttribute("name") !== "url_value") { return; }
+      fill(rowOf(t));
+    });
+    /* 粘贴 embed code 时 input 事件先到: 防抖后也判一次, 不用等失焦 */
+    var timer = null;
+    document.addEventListener("input", function (e) {
+      var t = e.target;
+      if (!t || !t.getAttribute || t.getAttribute("name") !== "url_value") { return; }
+      if (timer) { window.clearTimeout(timer); }
+      timer = window.setTimeout(function () { fill(rowOf(t)); }, 500);
+    });
+  }
+
   /* 选展会后自动填发售日: 只有发售日为空/与上次自动填的一致时才覆盖,
      避免把编辑者手填的日期冲掉。
      注意: `_bind()` 渲染的是**可见输入框** `.bind-input[data-name=event]`,
@@ -2615,12 +2976,14 @@
     // setupCoverUpload();
     // 新建专辑: 没有 key, 不能异步上传, 只选图 + 预览
     setupCoverPick();
+    setupLocalPhotos();
     setupTrackRows();
     setupPairRows();
     setupNoEnterSubmit();
     setupPeopleChips();
     setupCreditPeople();
     // setupCoverGallery();   // 同上: 由 cover-crop.js 接管
+    settlePendingDraft();
     setupEditDraft();
     setupDialogs();
     setupAppearance();
@@ -2632,6 +2995,7 @@
     setupConfirm();
     setupTrackExpand();
     setupEventAutoDate();
+    setupLinkAutoName();
   }
 
   if (document.readyState === "loading") {
