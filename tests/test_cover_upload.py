@@ -24,7 +24,8 @@ class TestCoverUploadFlow(unittest.TestCase):
     def test_invalidates_data_cache(self) -> None:
         """上传后必须让 data 缓存失效, 否则 /cover 还读旧路径."""
         source = (ROOT / "dddb/public/site.py").read_text(encoding="utf-8")
-        start = source.find("def _do_album_cover")
+        # 落盘 + 清缓存都在 _store_cover_bytes 里(与按 URL 抓封面共用)
+        start = source.find("def _store_cover_bytes")
         end = source.find("\n    def ", start + 10)
         block = source[start:end]
         self.assertIn("invalidate", block,
@@ -33,7 +34,8 @@ class TestCoverUploadFlow(unittest.TestCase):
     def test_writes_standard_cover_path(self) -> None:
         """封面写到 covers/<key>.img(封面服务认这个位置)."""
         source = (ROOT / "dddb/public/site.py").read_text(encoding="utf-8")
-        start = source.find("def _do_album_cover")
+        # 写盘在 _store_cover_bytes 里, 处理函数只负责校验 + 收尾
+        start = source.find("def _store_cover_bytes")
         end = source.find("\n    def ", start + 10)
         block = source[start:end]
         self.assertIn(".img", block)
