@@ -844,19 +844,40 @@
           var role = roleInput ? roleInput.value.trim() : "";
           valuesOf(row).forEach(function (name) {
             if (order.indexOf(name) === -1) { order.push(name); }
-            if (role && !roles[name]) { roles[name] = role; }
+            /* 一个人挂多个职责时**收齐**(用 / 连接), 与服务端渲染一致
+               —— 只留第一条会漏掉其他职责(用户 m12697)。 */
+            if (!role) { return; }
+            var list = roles[name] || (roles[name] = []);
+            if (list.indexOf(role) === -1) { list.push(role); }
           });
         });
       host.textContent = "";
+      /* 职责代码 -> 显示名: 服务端把 ROLE_LABELS 以 JSON 塞在
+         data-role-labels 上。词条框里是 `arrange` 这种原始代码, 服务端
+         渲染成「编曲」; 前端不查表就会显示成 `arrange`, 一次交互后变样。 */
+      var labelMap = {};
+      try {
+        labelMap = JSON.parse(host.getAttribute("data-role-labels") || "{}")
+          || {};
+      } catch (err) { labelMap = {}; }
+      function roleLabelOf(role) {
+        var code = String(role || "").trim();
+        if (!code) { return ""; }
+        return String(labelMap[code] || labelMap[code.toLowerCase()] || code);
+      }
+
       order.forEach(function (name) {
+        var chips = roles[name] || [];
+        var roleText = chips.join("/");
+        var shown = chips.map(roleLabelOf).filter(Boolean).join("/");
         var chip = document.createElement("span");
         chip.className = "person-chip is-static";
         chip.setAttribute("data-person", name);
-        chip.setAttribute("data-role", roles[name] || "");
+        chip.setAttribute("data-role", roleText);
         chip.setAttribute("data-entity-id", "0");
         var kind = document.createElement("span");
         kind.className = "person-kind";
-        kind.textContent = roles[name] || "艺人";
+        kind.textContent = shown || "艺人";
         var bold = document.createElement("b");
         bold.textContent = name;
         chip.appendChild(kind);
