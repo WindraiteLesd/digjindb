@@ -111,7 +111,9 @@ class TestCreditPeopleJs(unittest.TestCase):
         end = self.js.find("\n  /*", start + 10)
         block = self.js[start:end if end > 0 else start + 6000]
         self.assertIn('[data-people="artists"]', block)
-        self.assertIn(".person-chip", block)
+        self.assertIn("function rebuildSummary(", block)
+        self.assertIn("person-chip is-static", block)
+        self.assertNotIn("data-person-del", block)
 
     def test_writes_hidden_field(self) -> None:
         start = self.js.find("function setupCreditPeople(")
@@ -120,60 +122,70 @@ class TestCreditPeopleJs(unittest.TestCase):
         self.assertIn('name="credit_name"', block)
 
     def test_add_person_on_enter(self) -> None:
-        """人员输入框回车 -> 加进该行 + 生成上方按钮。"""
+        """人员输入框回车 -> 加进该行 -> 刷新上方只读汇总。"""
         start = self.js.find("function setupCreditPeople(")
         end = self.js.find("\n  /*", start + 10)
         block = self.js[start:end if end > 0 else start + 8000]
         self.assertIn("credit-person-input", block)
         self.assertIn("addPersonToRow", block)
-        self.assertIn("addRoleChip", block)
+        self.assertIn("rebuildSummary()", block)
+        # 不再往上方"生成按钮" —— 上方是只读的
+        self.assertNotIn("addRoleChip", block)
 
 
-class TestDropdownCloses(unittest.TestCase):
-    """候选框在失去焦点/点外部/加入后都要关闭。"""
+class TestSummaryIsReadOnly(unittest.TestCase):
+    """上方那排 chip 只是"下方词条合并后的效果", 不再有添加/删除入口。
+
+    用户要求(m11474): 上面只显示效果, 不是具有添加功能的一部分。
+    原来的搜索框 / 候选弹层 / × 反向删除都已移除。
+    """
 
     def setUp(self) -> None:
         self.js = _js()
+        self.html = _render()
 
-    def _people_block(self) -> str:
-        start = self.js.find("function setupPeopleChips(")
-        end = self.js.find("\n  /*", start + 10)
-        return self.js[start:end if end > 0 else start + 6000]
+    def _credit_card(self) -> str:
+        start = self.html.find('data-card="credits"')
+        end = self.html.find("</section>", start)
+        return self.html[start:end]
 
-    def test_no_blur_close(self) -> None:
-        """**不能用 blur 关闭** —— 点候选时输入框先失焦, 候选会在点击前消失,
-        表现就是"点选框不出现"。关闭交给: 外部点击 / Esc / 选中后。"""
-        block = self._people_block()
-        self.assertNotIn('addEventListener("blur"', block,
-                         "blur 关闭会让候选点不到")
-        self.assertIn('addEventListener("mousedown"', block,
-                      "要用 mousedown 选候选(早于失焦)")
+    def test_no_picker_in_html(self) -> None:
+        card = self._credit_card()
+        self.assertNotIn("people-picker", card)
+        self.assertNotIn("people-search", card)
+        self.assertIn("people-chips is-summary", card)
 
-    def test_outside_click_closes(self) -> None:
-        block = self._people_block()
-        self.assertIn("__peopleOutsideBound", block)
-        self.assertIn('addEventListener("mousedown"', block)
+    def test_chips_have_no_delete_button(self) -> None:
+        card = self._credit_card()
+        summary = card[card.find("people-chips is-summary"):]
+        summary = summary[:summary.find("</div>")]
+        self.assertIn("person-chip", summary)
+        self.assertNotIn("data-person-del", summary)
+        self.assertIn("is-static", summary)
 
-    def test_escape_closes(self) -> None:
-        self.assertIn("Escape", self._people_block())
+    def test_summary_carries_base_people(self) -> None:
+        """原有 artists 不能丢 —— 有 119 张专辑的 artists 不在任何词条里。"""
+        card = self._credit_card()
+        self.assertIn("data-artists=", card)
+        self.assertIn('name="artists"', card)
 
-    def test_add_closes(self) -> None:
-        block = self._people_block()
-        # add() 里最后要收起候选
-        idx = block.find("function add(")
-        self.assertGreater(idx, 0)
-        segment = block[idx:idx + 700]
-        self.assertIn('style.display = "none"', segment,
-                      "加入后应收起候选")
+    def test_candidate_pool_is_hidden(self) -> None:
+        """候选池保留了(词条行的联想要用), 但对上方不再可见。"""
+        self.assertIn("people-suggest-list", self.html)
+        self.assertIn("__creditArtistPool", self.js)
 
-    def test_only_one_popup_flag(self) -> None:
-        """外部点击监听只注册一次(用模块级标记)."""
-        self.assertIn("__peopleOutsideBound", self.js)
+    def test_summary_rebuilt_from_rows(self) -> None:
+        self.assertIn("function rebuildSummary(", self.js)
 
     def test_no_popup_anymore(self) -> None:
-        """人员不再是弹层选择, 所以没有 pop 元素了。"""
+        """上方人员不再是弹层选择, 所以没有 pop 元素了。"""
         self.assertNotIn("credit-people-pop", self.js,
                          "点选弹层已移除")
+
+    def test_credit_suggest_still_closes(self) -> None:
+        """词条行自己的候选框仍要能收起(点选后/失焦后)。"""
+        self.assertIn("function closeSuggest(", self.js)
+        self.assertIn('addEventListener("mousedown"', self.js)
 
 
 class TestCreditPeopleCss(unittest.TestCase):
