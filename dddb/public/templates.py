@@ -551,7 +551,7 @@ def layout(
 <!-- 唯一的脚本: 同源外链, 只做渐进增强(CSP 只给 script-src 'self') -->
 <script src="/static/public.js?v=56" defer></script>
 <script src="/static/cover-crop.js?v=6" defer></script>
-<script src="/static/infobox.js?v=6" defer></script>
+<script src="/static/infobox.js?v=7" defer></script>
 </head>
 <body{_bg_attr(ctx)}>
 <a class="skip" href="#content">跳到正文</a>
