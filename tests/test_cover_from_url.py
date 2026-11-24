@@ -261,7 +261,7 @@ class TestFrontendWiring(unittest.TestCase):
 
     def test_version_bumped(self) -> None:
         # 本轮又改了 infobox.js(曲目表填充), 版本号继续往上走
-        self.assertIn("infobox.js?v=7", self.tpl)
+        self.assertIn("infobox.js?v=8", self.tpl)
 
 
 if __name__ == "__main__":
