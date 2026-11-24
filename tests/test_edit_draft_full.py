@@ -69,7 +69,8 @@ class TestNoSelfTriggerLoop(unittest.TestCase):
 
     def test_compares_stamp_before_writing(self) -> None:
         self.assertIn("lastSaved", self.body)
-        self.assertIn("if (!stamp || stamp === lastSaved) { return; }", self.body)
+        self.assertIn("if (!force && (!stamp || stamp === lastSaved)) { return; }",
+                      self.body)
 
     def test_stamp_is_values_only(self) -> None:
         """指纹只由表单值算出来。
@@ -98,7 +99,7 @@ class TestDirtyGate(unittest.TestCase):
 
     def test_save_is_gated_by_dirty(self) -> None:
         self.assertIn("var dirty = false;", self.body)
-        self.assertIn("if (!dirty) { return; }", self.body)
+        self.assertIn("if (!force && !dirty) { return; }", self.body)
 
     def test_mutations_do_not_mark_dirty(self) -> None:
         self.assertIn("function onMutation() {", self.body)
@@ -113,7 +114,7 @@ class TestDirtyGate(unittest.TestCase):
 
     def test_flush_on_unload(self) -> None:
         """防抖 1.2 秒, 打完字立刻刷新就来不及写 —— 离开前补一次。"""
-        self.assertIn('window.addEventListener("beforeunload", save)', self.body)
+        self.assertIn('window.addEventListener("beforeunload"', self.body)
         self.assertIn("visibilitychange", self.body)
 
     def test_submit_clears_draft(self) -> None:
@@ -207,3 +208,50 @@ class TestVersionBumped(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestManualSaveButton(unittest.TestCase):
+    """「保存草稿」按钮: 不必等防抖, 也不必先改过东西(用户 m12181)。"""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.src = JS.read_text(encoding="utf-8")
+        cls.body = _block(cls.src, "setupEditDraft")
+        cls.tpl = TPL.read_text(encoding="utf-8")
+
+    def test_button_in_markup(self) -> None:
+        self.assertIn('data-draft-save="1"', self.tpl)
+        self.assertIn(">保存草稿</button>", self.tpl)
+
+    def test_button_next_to_clear(self) -> None:
+        """窄条里只该有一行两个按钮, 保存在前、清除在后。"""
+        save_at = self.tpl.index('data-draft-save="1"')
+        clear_at = self.tpl.index('data-draft-clear="1"')
+        self.assertLess(save_at, clear_at)
+
+    def test_save_takes_force(self) -> None:
+        self.assertIn("function save(force)", self.body)
+        self.assertIn("if (!force && !dirty) { return; }", self.body)
+        self.assertIn("if (!force && (!stamp || stamp === lastSaved)) { return; }",
+                      self.body)
+
+    def test_button_handler_forces_save(self) -> None:
+        self.assertIn('document.querySelector("[data-draft-save]")', self.body)
+        self.assertIn("save(true)", self.body)
+
+    def test_button_clears_pending_timer(self) -> None:
+        """手动存完不该再被 1.2 秒后的那次自动保存重复写一遍。"""
+        self.assertIn("window.clearTimeout(timer)", self.body)
+        self.assertIn("timer = null", self.body)
+
+    def test_failure_is_reported(self) -> None:
+        self.assertIn("保存草稿失败", self.body)
+
+    def test_status_text_says_saved(self) -> None:
+        self.assertIn('"草稿已保存 "', self.body)
+
+    def test_unload_does_not_force(self) -> None:
+        """beforeunload 直接把 save 交出去会把 Event 当 force, 要包一层。"""
+        self.assertIn("window.addEventListener(\"beforeunload\", function () { save(false); })",
+                      self.body)
+        self.assertNotIn('window.addEventListener("beforeunload", save)', self.body)
