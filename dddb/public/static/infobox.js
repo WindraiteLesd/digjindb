@@ -311,11 +311,11 @@
       });
 
     // 多值字段. 注意三种字段在页面上的控件不同:
-    //   artists -> 一排按钮(.person-chip) + 隐藏域(换行分隔)
     //   tags / circle / event -> bind 控件(隐藏域 + chips)
     //   genres -> 普通文本框(「、」分隔)
     // 直接写隐藏域而不重建按钮/chips, 之后任何一次交互都会把它覆盖回去。
-    ["artists", "tags", "genres"].forEach(function (k) {
+    // artists 不在这里处理 —— 见下面的「艺人落进词条行」。
+    ["tags", "genres"].forEach(function (k) {
       if (!s[k]) { return; }
       var parts = String(s[k]).split(/\s*[\/、]\s*/).filter(Boolean);
       if (k === "genres") {
@@ -357,6 +357,55 @@
         addCreditPeople(row, String(c.name || "").split(/[、,，\/]/));
       });
       filled.push("词条 " + d.credits.length);
+    }
+
+    /* 艺人(``artists``)落进**词条行的「人员」框**(用户要求 m11892)。
+       以前只写 hidden[name=artists], 于是上方只读预览显示有人、下方词条行
+       全空 —— 用户看不出这些人从哪来, 也没法给它们填职责。
+       现在: 词条里没出现过的人, 补一行职责留空(后端按 role="artist" 存,
+       显示成「艺人」), 名字进人员框; 已经出现在词条里的人不重复加。
+       整行职责留空是有意的 —— 一旦写了「艺人」两个字, 它会作为未知职责
+       排到最后, 而留空走的是后端的 ``role or "artist"`` 兜底。 */
+    if (s.artists) {
+      var artistNames = String(s.artists).split(/\s*[\/、]\s*/)
+        .filter(Boolean).map(function (one) { return one.trim(); });
+      var covered = {};
+      $$('[data-pair-row="credit"] .credit-person-chip').forEach(
+        function (chip) { covered[chip.getAttribute("data-name") || ""] = 1; });
+      /* 汇总区的基序换成 infobox 的 artists —— 否则贴着旧冠会残留
+         上一份数据里、这次 infobox 里没有的人。 */
+      var summaryHost = document.querySelector('[data-people="artists"]');
+      if (summaryHost) {
+        summaryHost.setAttribute("data-artists", artistNames.join("\n"));
+      }
+      var missing = artistNames.filter(function (one) {
+        return one && !covered[one];
+      });
+      if (missing.length) {
+        // 先找「职责空 + 没有人员」的行来放, 没有才新加一行
+        var target = null;
+        $$('[data-pair-row="credit"]').forEach(function (row) {
+          if (target) { return; }
+          var roleInput = row.querySelector('[name="credit_role"]');
+          var role = roleInput ? String(roleInput.value || "").trim() : "";
+          if (!role && !row.querySelectorAll(".credit-person-chip").length) {
+            target = row;
+          }
+        });
+        if (!target) {
+          ensureRows("credit", $$('[data-pair-row="credit"]').length + 1);
+          target = $$('[data-pair-row="credit"]').pop();
+        }
+        if (target) {
+          addCreditPeople(target, missing);
+          filled.push("艺人 " + missing.length);
+        }
+      }
+      /* 让上方只读汇总按新基序重排: rebuildSummary 挂在职责框的 input 上,
+         它同时会用「基序 + 词条人员」重写 artists 隐藏域。 */
+      var anyRole = document.querySelector(
+        '[data-pair-row="credit"] [name="credit_role"]');
+      if (anyRole) { fire(anyRole, "input"); }
     }
 
     // 曲目: 优先**直接填进下方曲目表的行**(用户看到的就是这张表);
