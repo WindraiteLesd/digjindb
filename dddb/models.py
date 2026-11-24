@@ -26,6 +26,29 @@ def _clean_str(value: Any) -> str:
     return textutil.clean_whitespace(str(value))
 
 
+def _clean_multiline(value: Any) -> str:
+    """多行文本(简介)规范化: **保留换行**, 只压掉行内重复空白.
+
+    ``_clean_str`` 走 ``clean_whitespace``, 那个把 ``\\s+`` 一律换成空格 ——
+    简介里的段落分隔会被抹平, 详情页就再也分不出段落
+    (用户 m13077: 草稿保存的简介缺少换行符 / 恢复后换行全丢)。
+    """
+    if value is None:
+        return ""
+    text = str(value).replace("\r\n", "\n").replace("\r", "\n")
+    lines = []
+    for line in text.split("\n"):
+        # 行内多空白收成一个, 但**行尾行首**只在需要时折
+        lines.append(re.sub(r"[ \t\u3000]+", " ", line).strip())
+    # 连续空行收成一个(段与段之间仍是空行)
+    out: list[str] = []
+    for line in lines:
+        if not line and out and not out[-1]:
+            continue
+        out.append(line)
+    return "\n".join(out).strip()
+
+
 # --------------------------------------------------------------------------
 # Track
 # --------------------------------------------------------------------------
@@ -532,7 +555,10 @@ class Album:
         self.cover_url = _clean_str(self.cover_url)
         self.cover_local = _clean_str(self.cover_local)
         self.cover_v = _clean_str(self.cover_v)
-        self.description = _clean_str(self.description)
+        # 简介是唯一的多行字段: **保留换行**(段落靠空行分开), 不能用
+        # _clean_str —— 那个把 \n 压成空格, 详情页就分不出段落了
+        # (用户 m13077: 草稿恢复后简介的换行全丢)。
+        self.description = _clean_multiline(self.description)
         self.price = _clean_str(self.price)
         self.artists = _clean_list(self.artists)
         self.genres = _clean_list(self.genres)
@@ -737,7 +763,7 @@ class Album:
             tracks=[Track.from_dict(t) for t in (data.get("tracks") or [])],
             credits=[Credit.from_dict(c) for c in (data.get("credits") or [])],
             photos=[dict(p) for p in (data.get("photos") or []) if isinstance(p, dict)],
-            description=_clean_str(data.get("description")),
+            description=_clean_multiline(data.get("description")),
             price=_clean_str(data.get("price")),
             urls=dict(data.get("urls") or {}),
             source_ids=dict(data.get("source_ids") or {}),
