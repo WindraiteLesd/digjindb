@@ -149,6 +149,59 @@
     return true;
   }
 
+  function ibMsg() { return $("[data-infobox-msg]"); }
+
+  // 把 infobox 里的 cover 地址真的存成封面.
+  //   编辑模式: 有专辑 key, 直接 POST /album/<key>/cover-url 让服务端抓;
+  //   新建模式: 还没有 key, 只能把地址塞进隐藏域, 保存时由服务端兜底抓。
+  // 返回 true 表示"这一项确实被处理了"(用于"已填入"提示)。
+  function applyCover(url) {
+    var box = ibMsg();
+    var hint = document.querySelector('[name="cover_url_hint"]');
+    if (hint) { hint.value = url || ""; }
+    var form = document.getElementById("cover-form");
+    var action = form && form.getAttribute("data-cover-action");
+    var token = form && form.getAttribute("data-cover-token");
+    if (!action || !token) {
+      // 新建页: 地址留在隐藏域, 保存时服务端抓
+      if (box) { box.textContent = "封面会在保存时自动抓取"; }
+      return true;
+    }
+    var target = action.replace(/\/cover$/, "/cover-url");
+    var body = new URLSearchParams();
+    body.set("csrf_token", token);
+    body.set("url", url);
+    if (box) { box.textContent = "正在抓取封面…"; }
+    fetch(target, {
+      method: "POST",
+      body: body,
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" }
+    }).then(function (r) {
+      return r.json().catch(function () {
+        return { ok: false, error: "HTTP " + r.status };
+      });
+    }).then(function (data) {
+      if (data && data.ok) {
+        var img = document.querySelector(".edit-cover-thumb img, .edit-cover-img img");
+        if (img) {
+          var base = img.getAttribute("src") || "";
+          img.setAttribute("src", base.split("?")[0] + "?t=" + Date.now());
+          img.hidden = false;
+        }
+        var fallback = document.querySelector(".edit-cover-thumb .cover-fallback span");
+        if (fallback) { fallback.style.display = "none"; }
+      } else if (box) {
+        box.textContent = "封面抓取失败: " + ((data && data.error) || "未知原因");
+      }
+    }).catch(function (err) {
+      if (box) {
+        box.textContent = "封面抓取失败: " + (err && err.message ? err.message : err);
+      }
+    });
+    return true;
+  }
+
   function applyInfobox(text) {
     var d = parseInfobox(text);
     var s = d.single;
@@ -230,9 +283,11 @@
     if (d.description && setField("description", d.description)) {
       filled.push("简介");
     }
-    // 封面: 编辑页/新建页都不再有「封面 URL」输入(一律走上传),
-    // 所以这一项填不进去 —— 明确说出来, 别让用户以为已经填了。
-    if (s.cover) { filled.push("封面需手动上传"); }
+    // 封面: 编辑页/新建页都没有「封面 URL」输入(一律走上传),
+    // 但服务端能按地址抓 —— 见 applyCover。
+    if (s.cover) {
+      if (applyCover(s.cover)) { filled.push("封面"); }
+    }
     return filled;
   }
 
