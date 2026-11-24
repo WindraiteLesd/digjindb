@@ -92,10 +92,24 @@ class TestDraftCollectsCover(unittest.TestCase):
     def test_cover_pick_writes_store(self):
         body = _block(JS, "setupCoverPick")
         self.assertIn('getElementById("cover-data")', body)
-        self.assertIn("store.value = data", body)
-        # 超大图不写(5MB 的 localStorage 装不下 2.7MB 的 base64)
+        self.assertIn("store.value = small", body)
+        # 原图 base64 动辄 1.3M 字符, 先缩到 900px 再存
+        self.assertIn("shrinkDataUrl(data, 900)", body)
         self.assertIn("1500000", body)
         self.assertIn("草稿里无法保留这张预览", body)
+
+    def test_shrink_helper_exists(self):
+        body = _block(JS, "shrinkDataUrl")
+        self.assertIn("new Image()", body)
+        self.assertIn("canvas", body)
+        self.assertIn("toDataURL", body)
+        self.assertIn("900", body)  # 默认边长上限
+
+    def test_collect_skips_cover_data(self):
+        """同一份 base64 存两遍会撑爆 localStorage(用户 m12486: 还是不行)。"""
+        body = _block(JS, "collect")
+        self.assertIn('if (name === "cover_data")', body)
+        self.assertNotIn("values.cover_data", body)
 
     def test_cover_pick_listens_change(self):
         body = _block(JS, "setupCoverPick")
