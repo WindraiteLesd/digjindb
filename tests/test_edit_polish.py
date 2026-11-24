@@ -55,14 +55,20 @@ class TestPersonChipWithRole(unittest.TestCase):
         self.chips = m.group(1) if m else ""
 
     def test_chip_has_role_attr(self) -> None:
+        """`data-role` 保留**库内原始代码**(JS 与测试按代码比对)."""
         self.assertIn('data-role="mastering"', self.chips)
         self.assertIn('data-role="Illustration"', self.chips)
 
     def test_chip_shows_role_and_name(self) -> None:
-        """按钮内容应是 职责 + 人名。"""
-        self.assertIn(">mastering<", self.chips)
+        """按钮内容应是 职责 + 人名.
+
+        职责走 ``role_label`` 显示 (库里的 ``mastering`` 要显示成「母带」),
+        与详情页一致 —— 否则同一张碟在编辑页是 ``mastering``、详情页是
+        「母带」, 两副样子。
+        """
+        self.assertIn(">母带<", self.chips)
         self.assertIn("<b>Ryo Mishima</b>", self.chips)
-        self.assertIn(">Illustration<", self.chips)
+        self.assertIn(">插画<", self.chips)
         self.assertIn("<b>いぬすけ</b>", self.chips)
 
     def test_artist_without_role(self) -> None:
@@ -76,8 +82,10 @@ class TestPersonChipWithRole(unittest.TestCase):
         self.assertIn("function rebuildSummary(", js)
         self.assertIn('t.name !== "credit_role"', js,
                       "职责框改动要触发汇总刷新")
-        # 生成的 chip 带 role
-        self.assertIn('chip.setAttribute("data-role", roles[name]', js)
+        # 生成的 chip 带 role(原始代码), 显示名走 data-role-labels 查表
+        self.assertIn('chip.setAttribute("data-role", roleText)', js)
+        self.assertIn('getAttribute("data-role-labels")', js)
+        self.assertIn("chips.map(roleLabelOf)", js)
         self.assertNotIn("function addRoleChip(", js,
                          "上方已无添加入口(m11474)")
 
