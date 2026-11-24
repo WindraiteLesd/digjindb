@@ -260,7 +260,8 @@ class TestFrontendWiring(unittest.TestCase):
         self.assertIn('name="cover_url_hint"', self.tpl)
 
     def test_version_bumped(self) -> None:
-        self.assertIn("infobox.js?v=6", self.tpl)
+        # 本轮又改了 infobox.js(曲目表填充), 版本号继续往上走
+        self.assertIn("infobox.js?v=7", self.tpl)
 
 
 if __name__ == "__main__":
