@@ -100,10 +100,36 @@ class TestNewPageMatchesEdit(unittest.TestCase):
         self.assertIn("/album/k%7C2026/edit", self.edit)
 
     def test_new_has_key_input(self) -> None:
-        """新建时给"编号/短名"输入框(留空自动生成)。"""
+        """新建时给专辑地址标识(留空自动生成), 但折在「高级」里。"""
         self.assertIn('name="album_key"', self.new)
         self.assertIn("留空自动生成", self.new)
         self.assertNotIn('name="album_key"', self.edit)
+        # 默认收起来: 不打扰正常新建流程(m13013)
+        self.assertIn('<details class="edit-advanced">', self.new)
+        self.assertIn("高级：自定义专辑地址标识", self.new)
+        self.assertNotIn('class="edit-advanced" open', self.new)
+
+    def test_advanced_block_is_collapsed_details(self) -> None:
+        """「高级」必须是 <details> 且默认关闭, 不当普通字段杵在表单顶上。"""
+        self.assertIn('<details class="edit-advanced">', self.new)
+        self.assertIn("<summary>", self.new)
+        self.assertNotIn('<details class="edit-advanced" open', self.new)
+        # 输入框在 details 里面(在 summary 之后、</details> 之前)
+        start = self.new.index('<details class="edit-advanced">')
+        end = self.new.index("</details>", start)
+        self.assertIn('name="album_key"', self.new[start:end])
+
+    def test_advanced_hint_explains_key(self) -> None:
+        """提示要说清它是网址里那一段, 不是随便的编号。"""
+        self.assertIn("专辑地址标识", self.new)
+        self.assertIn("网址里的这一段就是它", self.new)
+        self.assertIn("建好后不再变", self.new)
+
+    def test_advanced_css_exists(self) -> None:
+        css = (ROOT / "dddb/public/static/public.css").read_text(encoding="utf-8")
+        self.assertIn(".edit-advanced {", css)
+        self.assertIn(".edit-advanced summary {", css)
+        self.assertIn(".edit-advanced[open] summary {", css)
 
     def test_new_has_no_delete(self) -> None:
         """新建时还没有专辑, 不该有删除按钮。"""
