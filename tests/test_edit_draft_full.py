@@ -80,8 +80,8 @@ class TestNoSelfTriggerLoop(unittest.TestCase):
         永远相同, 后面改的全被跳过(用户 m12045: 刷新后草稿丢失)。
         """
         self.assertNotIn('payload.indexOf(\',"at":\')', self.body)
-        self.assertIn("function snapshotOf(values)", self.body)
-        self.assertIn("JSON.stringify({ action: action, values: values })",
+        self.assertIn("function snapshotOf(values, extra)", self.body)
+        self.assertIn("JSON.stringify({ action: action, values: values, extra: extra })",
                       self.body)
 
 
@@ -122,9 +122,13 @@ class TestDirtyGate(unittest.TestCase):
         self.assertIn("window.localStorage.removeItem(KEY)", self.body)
 
     def test_identical_draft_is_dropped(self) -> None:
-        """草稿和页面当前值一样时不必提示恢复。"""
-        self.assertIn("JSON.stringify(saved.values) === JSON.stringify(collect())",
-                      self.body)
+        """草稿和页面当前值一样时不必提示恢复。
+
+        比较也要带上 extra(封面 data URL), 否则带封面的草稿会被当成
+        「和页面一样」而静默删掉。
+        """
+        self.assertIn("snapshotOf(collect(), collectExtra())", self.body)
+        self.assertIn("snapshotOf(saved.values, saved.extra)", self.body)
 
 
 class TestRestoreFitsRows(unittest.TestCase):
