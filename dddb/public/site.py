@@ -124,6 +124,8 @@ MAX_BODY = 8 * 1024 * 1024
 
 #: 单张图片上限(与 _save_*_image 里的检查一致)
 MAX_IMAGE_BODY = 2 * 1024 * 1024
+#: 新建专辑时随表单带上的「其他照片」最多几张(防止一个请求塞一张相册)
+MAX_NEW_PHOTOS = 12
 
 #: 表单里重复行(词条/外链/曲目)的上限
 MAX_ROWS = 300
@@ -383,6 +385,8 @@ _ROUTE_MAP = {
     "embed": "embed",
     # 展会词条的本地图片
     "event-logo": "event_logo",
+    # 艺人头像 / 社团徽标(新建条目时 _save_new_image 写盘, 这里读回来)
+    "logo": "logo",
     # 展会**系列**: 详情页与图片
     # event-series 用**基础名** event_series: 下面的分支再细分
     # /<name> /<name>/edit /new, 直接把 name 设成最终路由会让 /edit 失效
@@ -420,7 +424,7 @@ _ROUTE_MAP = {
 #: 这些路由名必须有第二个路径段, 否则视为 index(或 404)
 _ENTITY_ROUTES = frozenset({"album", "circle", "event", "tag", "cover", "static",
                               "event-date", "embed", "event_logo", "event_series_page",
-                              "event_series_logo", "event_series_poster"})
+                              "event_series_logo", "event_series_poster", "logo"})
 
 #: 索引页路由名 -> 实体路由名(``/circle/<x>`` 缺失时退化为 ``/circles``)
 _INDEX_OF = {"album": "albums", "circle": "circles", "event": "events", "tag": "tags"}
@@ -464,6 +468,9 @@ def parse_route(path: str) -> dict[str, str]:
         return {"name": "artist_comment", "arg": "/".join(rest[:-1])}
     if name == "album" and len(rest) >= 2 and rest[-1].lower() == "delete":
         return {"name": "album_delete", "arg": "/".join(rest[:-1])}
+    # 合并专辑: 把本条目并进另一条(保留目标, 本条目删除)
+    if name == "album" and len(rest) >= 2 and rest[-1].lower() == "merge":
+        return {"name": "album_merge", "arg": "/".join(rest[:-1])}
     if name == "album" and len(rest) >= 2 and rest[-1].lower() == "comment":
         return {"name": "album_comment", "arg": "/".join(rest[:-1])}
     if name == "album" and len(rest) >= 2 and rest[-1].lower() == "cover":
@@ -535,6 +542,57 @@ def parse_query(query: str) -> dict[str, list[str]]:
     if not query:
         return {}
     return {k: v for k, v in urllib.parse.parse_qs(query, keep_blank_values=False).items() if v}
+
+
+#: 编辑历史对比里逐项检查的字段。
+#:
+#: **必须是 ``Album.to_dict()`` 里真实存在的键** —— 早期版本写的是
+#: ``track_list``(Album 没有这个字段, 曲目在 ``tracks`` 里), 于是曲目改动
+#: 永远比不出来(用户 m13077: "对比不上")。
+_HISTORY_DIFF_FIELDS: tuple[str, ...] = (
+    "title", "title_original", "title_romaji", "circle", "artists",
+    "release_date", "event", "catalog_no", "company", "genres", "tags",
+    "description", "price", "hall", "booth", "tracks", "credits", "photos",
+    "urls", "cover_url", "cover_local",
+)
+
+
+def _plain_value(value: Any) -> Any:
+    """把任意嵌套值规整成可比较的形式(dict 按键排序成元组)."""
+    if isinstance(value, Mapping):
+        return tuple(sorted((str(k), _plain_value(v)) for k, v in value.items()))
+    if isinstance(value, (list, tuple)):
+        return tuple(_plain_value(one) for one in value)
+    return value
+
+
+def _urls_map(value: Any) -> tuple[tuple[str, str], ...]:
+    """外链统一成 ``((名字, 地址), ...)``; 兼容 dict 与 ``[{name,url}]`` 两种存量."""
+    items: list[tuple[str, str]] = []
+    if isinstance(value, Mapping):
+        pairs = list(value.items())
+    elif isinstance(value, (list, tuple)):
+        pairs = []
+        for one in value:
+            if isinstance(one, Mapping):
+                name = one.get("name") or one.get("key") or one.get("text") or ""
+                url = one.get("url") or one.get("value") or one.get("href") or ""
+                pairs.append((name, url))
+    else:
+        pairs = []
+    for name, url in pairs:
+        text = str(url or "").strip()
+        if not text:
+            continue
+        items.append((str(name or "").strip(), text))
+    return tuple(sorted(items))
+
+
+def _history_value(field: str, value: Any) -> Any:
+    """对比用的规整值: 外链按名字排序, 其余递归规整."""
+    if field == "urls":
+        return _urls_map(value)
+    return _plain_value(value)
 
 
 def _first(values: Mapping[str, Any], key: str, default: str = "") -> str:
@@ -2097,6 +2155,8 @@ class PublicSite:
             return self.serve_embed(arg)
         if name == "event_logo":
             return self.serve_event_logo(arg)
+        if name == "logo":
+            return self.serve_logo_image(arg)
         if name == "event_series_page":
             return Response.html(self.page_event_series(
                 str(arg or ""), params or {}, state))
@@ -2537,21 +2597,25 @@ class PublicSite:
             return self._do_series_save(str(arg or "").strip("/"), values,
                                         state, cookies, headers, body)
         if name == "new":
-            return self._do_new_entity(str(arg or "").strip().strip("/").lower(),
-                                       values, state, cookies, headers, body)
+            return self._new_entity_with_fallback(
+                str(arg or "").strip().strip("/").lower(),
+                values, state, cookies, headers, body)
 
         if name in ("artist_edit", "circle_edit", "event_edit", "tag_edit"):
             return self._do_entity_update(name.split("_")[0], arg, values, state, cookies)
 
         if name == "new_entity":
-            return self._do_new_entity(str(arg or "").strip().strip("/").lower(),
-                                       values, state, cookies)
+            return self._new_entity_with_fallback(
+                str(arg or "").strip().strip("/").lower(),
+                values, state, cookies)
 
         if name == "artist_comment":
             return self._do_artist_comment(values, state, cookies)
 
         if name == "album_delete":
             return self._do_album_delete(arg, values, state, cookies)
+        if name == "album_merge":
+            return self._do_album_merge(arg, values, state, cookies)
 
         if name == "comment_like":
             return self._do_comment_like(text_field(values, "comment_id"), values, state, cookies)
@@ -3016,7 +3080,10 @@ class PublicSite:
         revisions: list[dict[str, Any]] = []
         selected: dict[str, Any] | None = None
         diff_rows: list[dict[str, Any]] = []
-        current = album.to_dict() if hasattr(album, "to_dict") else dict(album)
+        # 注意: album 是**视图**(make_view 产物, urls 是列表 / credits 已分组 /
+        # date 而非 release_date), 而修订快照是 Album 形状。直接比两者永远不等 ——
+        # 用户 m13077 报"对比不上"就是这个原因。所以两边都走 Album.to_dict()。
+        current: dict[str, Any] = {}
         if self.db_path is not None:
             store = _Store(self.db_path)
             try:
@@ -3024,6 +3091,9 @@ class PublicSite:
                 rev_id = _first(params or {}, "rev")
                 if rev_id:
                     selected = store.get_revision(rev_id)
+                _alive = store.get_album(key)
+                if _alive is not None:
+                    current = _alive.to_dict()
             finally:
                 store.close()
             if selected is not None:
@@ -3033,12 +3103,10 @@ class PublicSite:
                     snap_dict = snap.to_dict() if hasattr(snap, "to_dict") else {}
                 except Exception:                 # noqa: BLE001
                     snap_dict = {}
-                for field in ("title", "circle", "artists", "release_date", "event",
-                              "catalog_no", "genres", "tags", "description", "price",
-                              "track_list", "urls", "credits"):
+                for field in _HISTORY_DIFF_FIELDS:
                     before = snap_dict.get(field)
                     after = current.get(field)
-                    if before != after:
+                    if _history_value(field, before) != _history_value(field, after):
                         diff_rows.append({"field": field, "before": before, "after": after})
         for item in revisions:
             item["created_at_text"] = _stamp_text(item.get("created_at"), _lang)
@@ -3732,6 +3800,94 @@ class PublicSite:
         if state.session is not None:
             state.session.flash = "专辑已删除"
         return Response.redirect("/albums", status=303)
+
+    def _do_album_merge(self, key: str, values: Mapping[str, Any],
+                        state: auth.AuthState, cookies: list[str]) -> Response:
+        """把这张专辑并进另一张(仅编辑者).
+
+        ``POST /album/<key>/merge`` + 表单字段 ``target``: 既接受另一种写法
+        的 **key**, 也接受整条 ``/album/<key>`` / ``/album/<key>/edit`` 地址
+        (用户多半是从地址栏直接粘过来的)。
+
+        合并方向: **保留 target, 删掉当前 key** —— 与目标页的「合并进来」语义
+        一致, 也符合用户在编辑页上的直觉(我在草稿条目上点合并, 留下的应该是
+        正式那一条)。底层用 ``Store.merge_albums(keep_key=target, drop_key=key)``。
+        """
+        if not self.can_edit(state):
+            return self._html(self.forbidden(state, "只有编辑者可以合并专辑。"),
+                              status=403, cookies=cookies)
+        if self.db_path is None:
+            return self._html(self.forbidden(state, "本站当前不允许写入。"),
+                              status=503, cookies=cookies)
+        raw = text_field(values, "target").strip()
+        target = self._album_key_from_input(raw)
+        if not target:
+            if state.session is not None:
+                state.session.flash = "请填写要合并到的专辑(编号或 /album/... 地址)"
+            return Response.redirect(
+                "/album/" + T.quote_segment(key) + "/edit", status=303)
+        if target == key:
+            if state.session is not None:
+                state.session.flash = "不能把专辑合并到自己"
+            return Response.redirect(
+                "/album/" + T.quote_segment(key) + "/edit", status=303)
+        merged = False
+        from dddb.db import Store as _Store
+        store = _Store(self.db_path)
+        try:
+            if store.get_album(key) is None:
+                return self._html(self.error_page(
+                    self.context(state), status=404,
+                    message=f"没有这张专辑: {key}"), status=404, cookies=cookies)
+            if store.get_album(target) is None:
+                if state.session is not None:
+                    state.session.flash = f"没有要合并到的那张专辑: {target}"
+                return Response.redirect(
+                    "/album/" + T.quote_segment(key) + "/edit", status=303)
+            merged = store.merge_albums(keep_key=target, drop_key=key)
+            if merged:
+                # 与删除一致: 关联表/评论/修订里属于**被并条目**的痕迹清掉,
+                # 避免 /album/<key> 还能查到已经不存在的那张。
+                for table in ("album_artists", "album_circles", "album_events",
+                              "album_tag_ids"):
+                    try:
+                        store.execute(
+                            f"DELETE FROM {table} WHERE album_key = ?", (key,))
+                    except Exception:      # noqa: BLE001
+                        pass
+                for table, column in (("comments", "target_key"),
+                                      ("album_revisions", "album_key")):
+                    try:
+                        store.execute(
+                            f"DELETE FROM {table} WHERE {column} = ?", (key,))
+                    except Exception:      # noqa: BLE001
+                        pass
+        finally:
+            store.close()
+        if hasattr(self.data, "invalidate"):
+            self.data.invalidate()
+        if state.session is not None:
+            state.session.flash = ("已合并到 " + target) if merged else "合并失败"
+        return Response.redirect("/album/" + T.quote_segment(target), status=303)
+
+    @staticmethod
+    def _album_key_from_input(raw: str) -> str:
+        """把「合并到」输入框的内容变成专辑 key.
+
+        接受 ``adore|nika-lenz---kaza|2026``、``/album/<key>``、
+        ``https://www.digjindb.top/album/<key>/edit``。其它情况返回空串。
+        """
+        text = str(raw or "").strip()
+        if not text:
+            return ""
+        if "/album/" in text or text.startswith("album/"):
+            tail = text.split("/album/", 1)[-1] if "/album/" in text else text[6:]
+            tail = tail.split("?", 1)[0].split("#", 1)[0]
+            segments = [seg for seg in tail.split("/") if seg]
+            if len(segments) >= 2 and segments[-1].lower() in ("edit", "merge"):
+                segments = segments[:-1]
+            return urllib.parse.unquote("/".join(segments)).strip()
+        return urllib.parse.unquote(text).strip()
 
     def _do_album_comment(self, values: Mapping[str, Any], state: auth.AuthState,
                           cookies: list[str]) -> Response:
@@ -4816,6 +4972,87 @@ class PublicSite:
             liked_ids=sorted(my_likes),
         )
 
+    def _save_new_photos(self, key: str, values: Mapping[str, Any]) -> int:
+        """新建专辑时带的「其他照片」-> 落盘 + 写进 payload.
+
+        新建页还没有 key, 没法走编辑页那套异步 ``POST /album/<key>/photo``,
+        所以前端把图缩成 data URL 放进隐藏域 ``photos_data``(JSON 数组,
+        每项 ``{data, note}``), 等专辑建好由这里补写。返回值 = 成功张数。
+        """
+        import base64 as _b64
+        import json as _json
+        import uuid as _uuid
+
+        from .photos import MAX_PHOTO_BYTES, add_photo, photo_dir
+
+        key = str(key or "").strip()
+        if not key or self.db_path is None:
+            return 0
+        raw = str(raw_field(values, "photos_data") or "").strip()
+        if not raw.startswith("["):
+            return 0
+        try:
+            items = _json.loads(raw)
+        except ValueError:
+            return 0
+        if not isinstance(items, list) or not items:
+            return 0
+        covers = getattr(self.data, "covers_dir", None)
+        if not covers:
+            return 0
+        folder = photo_dir(covers, key)
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            return 0
+        from dddb.db import Store as _Store
+        store = _Store(self.db_path)
+        saved = 0
+        try:
+            row = store.query_one("SELECT payload FROM albums WHERE key = ?", (key,))
+            if row is None:
+                return 0
+            payload = str(row["payload"] or "{}")
+            for item in items[:MAX_NEW_PHOTOS]:
+                if not isinstance(item, Mapping):
+                    continue
+                match = re.match(
+                    r"data:image/(png|jpe?g|webp);base64,(.+)",
+                    str(item.get("data") or ""), re.I | re.S)
+                if match is None:
+                    continue
+                ext = {"png": ".png", "jpg": ".jpg", "jpeg": ".jpg",
+                       "webp": ".webp"}[match.group(1).lower()]
+                try:
+                    blob = _b64.b64decode(match.group(2), validate=False)
+                except Exception:             # noqa: BLE001
+                    continue
+                if not blob or len(blob) > MAX_PHOTO_BYTES:
+                    continue
+                name = _uuid.uuid4().hex[:16] + ext
+                try:
+                    (folder / name).write_bytes(blob)
+                except OSError:
+                    continue
+                url = "/photo/{}/{}".format(T.quote_segment(key), name)
+                payload, ok = add_photo(payload, url=url, path=str(folder / name),
+                                        note=str(item.get("note") or "")[:200])
+                if not ok:
+                    try:
+                        (folder / name).unlink()
+                    except OSError:
+                        pass
+                    continue
+                saved += 1
+            if saved:
+                store.execute(
+                    "UPDATE albums SET payload = ? WHERE key = ?",
+                    (json.dumps(_json.loads(payload) if isinstance(payload, str)
+                                else payload, ensure_ascii=False), key))
+        finally:
+            store.close()
+        return saved
+
     @staticmethod
     def _split_names(raw: str) -> list[str]:
         """多值拆分: **以换行为主**(名字里可能含"、"), 旧数据兼容"、"。"""
@@ -4907,8 +5144,10 @@ class PublicSite:
         if self.db_path is None:
             return
         if kind == "album":
-            covers = getattr(self.config, "covers_dir", None) or getattr(
-                self.data, "covers_dir", None)
+            # 注意: PublicSite **没有** ``self.config``(踩过线上 500:
+            # "'PublicSite' object has no attribute 'config'")。封面目录只在
+            # ``self.data.covers_dir`` 上, 构建站点时由 build_site() 注入。
+            covers = getattr(self.data, "covers_dir", None)
             if covers is None:
                 return
             try:
@@ -4925,7 +5164,12 @@ class PublicSite:
             return
         if kind not in ("artist", "circle"):
             return
-        logos = Path(getattr(self.config, "data_dir", ".")) / "logos"
+        # 同样不能读 self.config: 头像/社徽目录挂在封面目录下的 logos/,
+        # 拿不到封面目录就退回数据库同级目录(与系列图片一致)。
+        covers = getattr(self.data, "covers_dir", None)
+        base = Path(covers) if covers else (
+            Path(self.db_path).parent / "covers" if self.db_path else Path("."))
+        logos = base / "logos"
         try:
             logos.mkdir(parents=True, exist_ok=True)
             safe = T.quote_segment(name).replace("%", "_")
@@ -4946,6 +5190,87 @@ class PublicSite:
                 store.upsert_circle(Circle.from_dict({"name": name, "logo_url": url}))
         finally:
             store.close()
+
+    def _save_new_photos(self, key: str, values: Mapping[str, Any]) -> int:
+        """新建专辑时带的「其他照片」-> 落盘 + 写进 payload.
+
+        新建页还没有 key, 没法走编辑页那套异步 ``POST /album/<key>/photo``,
+        所以前端把图缩成 data URL 放进隐藏域 ``photos_data``(JSON 数组,
+        每项 ``{data, note}``), 等专辑建好由这里补写。返回值 = 成功张数。
+        """
+        import base64 as _b64
+        import json as _json
+        import uuid as _uuid
+
+        from .photos import MAX_PHOTO_BYTES, add_photo, photo_dir
+
+        key = str(key or "").strip()
+        if not key or self.db_path is None:
+            return 0
+        raw = str(raw_field(values, "photos_data") or "").strip()
+        if not raw.startswith("["):
+            return 0
+        try:
+            items = _json.loads(raw)
+        except ValueError:
+            return 0
+        if not isinstance(items, list) or not items:
+            return 0
+        covers = getattr(self.data, "covers_dir", None)
+        if not covers:
+            return 0
+        folder = photo_dir(covers, key)
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            return 0
+        from dddb.db import Store as _Store
+        store = _Store(self.db_path)
+        saved = 0
+        try:
+            row = store.query_one("SELECT payload FROM albums WHERE key = ?", (key,))
+            if row is None:
+                return 0
+            payload = str(row["payload"] or "{}")
+            for item in items[:MAX_NEW_PHOTOS]:
+                if not isinstance(item, Mapping):
+                    continue
+                match = re.match(
+                    r"data:image/(png|jpe?g|webp);base64,(.+)",
+                    str(item.get("data") or ""), re.I | re.S)
+                if match is None:
+                    continue
+                ext = {"png": ".png", "jpg": ".jpg", "jpeg": ".jpg",
+                       "webp": ".webp"}[match.group(1).lower()]
+                try:
+                    blob = _b64.b64decode(match.group(2), validate=False)
+                except Exception:             # noqa: BLE001
+                    continue
+                if not blob or len(blob) > MAX_PHOTO_BYTES:
+                    continue
+                name = _uuid.uuid4().hex[:16] + ext
+                try:
+                    (folder / name).write_bytes(blob)
+                except OSError:
+                    continue
+                url = "/photo/{}/{}".format(T.quote_segment(key), name)
+                payload, ok = add_photo(payload, url=url, path=str(folder / name),
+                                        note=str(item.get("note") or "")[:200])
+                if not ok:
+                    try:
+                        (folder / name).unlink()
+                    except OSError:
+                        pass
+                    continue
+                saved += 1
+            if saved:
+                store.execute(
+                    "UPDATE albums SET payload = ? WHERE key = ?",
+                    (json.dumps(_json.loads(payload) if isinstance(payload, str)
+                                else payload, ensure_ascii=False), key))
+        finally:
+            store.close()
+        return saved
 
     @staticmethod
     def _split_names(raw: str) -> list[str]:
@@ -5088,6 +5413,73 @@ class PublicSite:
         return out
 
 
+    def _new_entity_with_fallback(self, kind: str, values: Mapping[str, Any],
+                            state: auth.AuthState, cookies: list[str],
+                            headers: Mapping[str, Any] | None = None,
+                            body: bytes = b"") -> Response:
+        """``_do_new_entity`` 的**兜底外壳**: 任何异常都回填新建表单, 绝不 500.
+
+        用户 m13494: 新建专辑 adore 时报 ``500 内部错误: 'PublicSite' object
+        has no attribute 'config'`` —— 通用错误页只有一个错误码, **填过的内容
+        全没了**, 草稿也在提交那一刻被清掉, 等于白写两张表。
+        所以这里把没预料到的异常也变成"回到新建页、内容原样还在"。
+        """
+        try:
+            return self._do_new_entity(kind, values, state, cookies, headers, body)
+        except Exception as exc:                  # noqa: BLE001 - 兜底
+            logger.exception("新建条目失败 kind=%s", kind)
+            return self._new_entity_failed(kind, values, state, cookies, exc)
+
+    def _new_entity_failed(self, kind: str, values: Mapping[str, Any],
+                           state: auth.AuthState, cookies: list[str],
+                           exc: BaseException) -> Response:
+        """把"没建成功"渲染成**带原值的新建表单**(而不是一个错误页)."""
+        note = ("没有保存成功。下面是你刚才填的内容(服务端已原样保留), "
+                "检查后可以直接再点一次保存。")
+        html = ""
+        try:
+            if kind == "album":
+                patch, errors = parse_album_form(values)
+                # 回显必须用 form_display_values(): 模板要的是"表单回显结构"
+                # (``urls`` 是 ``[{key, url}]``、``credits`` 是 ``[{role, name}]``),
+                # 而不是 parse_album_form 的 patch(那里 urls 是 {名字: 地址},
+                # 直接塞给模板会 AttributeError: 'str' object has no attribute 'get')。
+                display = form_display_values(values)
+                # 解析出来但表单里没有的(比如曲目粘贴被识别出来的标题)补进去,
+                # 用户看到的就是"他真要保存的样子"。
+                for field in ("title", "title_original", "title_romaji", "circle",
+                              "release_date", "event", "catalog_no", "price",
+                              "description"):
+                    if not str(display.get(field) or "").strip() and patch.get(field):
+                        display[field] = patch[field]
+                if patch.get("tracks") and not display.get("tracks"):
+                    display["tracks"] = patch["tracks"]
+                html = T.edit_album_page(
+                    self.context(state, active="edit"),
+                    album={},
+                    values=display,
+                    errors=errors,
+                    notice=note,
+                    bind_options=self.bind_options(),
+                    creating=True,
+                )
+            else:
+                html = T.new_entity_page(
+                    self.context(state, active="edit"), kind,
+                    values=dict(values or {}), notice=note,
+                    bind_options=self.bind_options(),
+                )
+        except Exception:                         # noqa: BLE001
+            logger.exception("回填新建表单也失败了 kind=%s", kind)
+            html = ""
+        if not html:
+            html = T.error_page(
+                self.context(state), status=500,
+                message=f"内部错误: {exc}")
+        # 提交失败时**保住草稿**: 前端看到本页仍有编辑表单就不会清 localStorage,
+        # 所以这里刻意不写 data-draft-done 之类的完成标记。
+        return self._html(html, status=500, cookies=cookies)
+
     def _do_new_entity(self, kind: str, values: Mapping[str, Any],
                        state: auth.AuthState, cookies: list[str],
                        headers: Mapping[str, Any] | None = None,
@@ -5121,11 +5513,13 @@ class PublicSite:
                 # 写成 ``T.parse_album_form`` 会让 /new/album 直接 500。
                 patch, errors = parse_album_form(values)
                 if errors:
-                    # 有错就回填整张卡片界面(不是那张 19 个文本框的旧表单)
+                    # 有错就回填整张卡片界面(不是那张 19 个文本框的旧表单)。
+                    # 回显用 form_display_values: patch 里的 urls 是 {名字: 地址},
+                    # 模板要的是 [{key, url}] —— 直接塞 patch 会 500(踩过)。
                     return self._html(
                         T.edit_album_page(
                             self.context(state, active="edit"),
-                            album={}, values=patch or values,
+                            album={}, values=form_display_values(values),
                             errors=errors,
                             notice="没有保存，请修正下面的问题。",
                             bind_options=self.bind_options(),
@@ -5192,8 +5586,13 @@ class PublicSite:
                         _hint = str(text_field(values, "cover_url_hint") or "").strip()
                         if _hint:
                             self._store_cover_from_url(key, _hint)
+                # 其他照片: 新建页没有 key, 前端先把图缩成 data URL 塞进
+                # ``photos_data``, 这里建完专辑再逐张落盘(与编辑页同一个目录)。
+                self._save_new_photos(key, values)
+                # 建完直接跳**详情页**(用户 m13494: 别再回编辑界面)。
+                # ``?created=1`` 是给前端看的信号: 落地页没有编辑表单 -> 清草稿。
                 created_key = created_name = key
-                target = "/album/" + T.quote_segment(key) + "/edit"
+                target = "/album/" + T.quote_segment(key) + "?created=1"
             elif kind == "circle":
                 name = field("name")
                 if not name:
@@ -5284,7 +5683,12 @@ class PublicSite:
         finally:
             store.close()
 
-        self._save_new_image(kind, created_key or created_name, headers, body)
+        # 条目**已经建好了**, 图片上传是最后一步的锦上添花 ——
+        # 这里任何异常都只记日志(以前这里 500, 用户以为整次创建失败)。
+        try:
+            self._save_new_image(kind, created_key or created_name, headers, body)
+        except Exception:                         # noqa: BLE001
+            logger.exception("新建条目后保存图片失败 kind=%s", kind)
         if hasattr(self.data, "invalidate"):
             self.data.invalidate()
         if state.session is not None:
@@ -6235,6 +6639,42 @@ class PublicSite:
             parts.append("  </url>")
         parts.append("</urlset>")
         return "\n".join(parts) + "\n"
+
+    def serve_logo_image(self, name: str) -> Response:
+        """``/logo/<文件名>``: 艺人头像 / 社团徽标.
+
+        新建条目时 ``_save_new_image`` 把图片写进 ``<covers>/logos/`` 并把
+        ``/logo/<kind>-<name>.<ext>`` 写进条目; 这里把它读回来。
+        只认**单段文件名**(没有 ``/``、不是 ``..``), 杜绝路径穿越。
+        """
+        wanted = str(name or "").strip()
+        if not wanted:
+            return self._plain_404()
+        filename = wanted.rsplit("/", 1)[-1]
+        if not filename or filename in (".", ".."):
+            return self._plain_404()
+        if "/" in filename or "\\" in filename or "%2f" in filename.lower():
+            return self._plain_404()
+        covers = getattr(self.data, "covers_dir", None)
+        if covers:
+            base = Path(covers)
+        elif self.db_path is not None:
+            base = Path(self.db_path).parent / "covers"
+        else:
+            base = Path("covers")
+        path = base / "logos" / filename
+        try:
+            if not path.is_file():
+                return self._plain_404()
+            blob = path.read_bytes()
+        except OSError:
+            return self._plain_404()
+        if not blob:
+            return self._plain_404()
+        ctype = sniff_image_type(blob) or "image/png"
+        resp = Response.binary(blob, ctype, status=200)
+        resp.headers["Cache-Control"] = "public, max-age=86400"
+        return resp
 
     def serve_event_logo(self, name: str) -> Response:
         """``/event-logo/<展会名>``: 展会词条的本地图片.
