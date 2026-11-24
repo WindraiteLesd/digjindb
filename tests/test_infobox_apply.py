@@ -121,11 +121,13 @@ class TestRowsAreCreatedOnDemand(unittest.TestCase):
 class TestCoverIsReported(unittest.TestCase):
     """封面已经没有任何输入框, 填不进去必须说出来。"""
 
-    def test_cover_mentions_manual_upload(self) -> None:
+    def test_cover_is_applied(self) -> None:
+        """封面不再提示手动上传 —— 现在按地址自动抓。"""
         js = _js(INFOBOX_JS)
         i = js.find("function applyInfobox(")
         block = js[i:]
-        self.assertIn("封面需手动上传", block)
+        self.assertNotIn("封面需手动上传", block)
+        self.assertIn("applyCover(s.cover)", block)
 
 
 class TestNewAlbumKeepsTracks(unittest.TestCase):
