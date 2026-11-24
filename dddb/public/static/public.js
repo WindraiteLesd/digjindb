@@ -817,6 +817,15 @@
       if (hidden) { hidden.value = list.join("、"); }
     }
 
+    /* 从基础名单里摘掉一个人(只改属性, 不动已渲染的 chip) */
+    function dropFromBase(name) {
+      var keep = (host.getAttribute("data-artists") || "")
+        .split(/[\n、]+/)
+        .map(function (one) { return one.trim(); })
+        .filter(function (one) { return !!one && one !== name; });
+      host.setAttribute("data-artists", keep.join("\n"));
+    }
+
     /* 重建上方只读汇总: 与详情页同源算法
          - 先放原 artists(职责空 -> 显示「艺人」)
          - 再遍历词条补职责, 同一人只有一条
@@ -919,8 +928,15 @@
       e.preventDefault();
       var chip = del.closest(".credit-person-chip");
       var row = chip ? chip.closest(".credit-row") : null;
+      var gone = chip ? String(chip.getAttribute("data-name") || "") : "";
       if (chip && chip.parentNode) { chip.parentNode.removeChild(chip); }
       if (row) { writeValues(row); }
+      /* 基础名单(data-artists)也要把这个人踢掉 —— 它是 infobox 填入时
+         写进去的, rebuildSummary 每次都从它起头, 不删就等于删了个寂寞
+         (用户 m12610: 删除后仍然出现在预览中)。
+         同一个人若还在别的词条行, 下面 rebuildSummary 的补人循环会把它
+         加回来, 所以这里无条件删是安全的。 */
+      if (gone) { dropFromBase(gone); }
       rebuildSummary();
     });
 
