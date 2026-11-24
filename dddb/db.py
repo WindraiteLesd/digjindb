@@ -2873,6 +2873,28 @@ class Store:
         keep.tags = list(dict.fromkeys([*keep.tags, *drop.tags]))
         if not keep.tracks and drop.tracks:
             keep.tracks = list(drop.tracks)
+        # 制作人员: 按 (职责, 规范化名字) 去重后并集 —— 保留项已有的同一职责
+        # 同一人不再重复; 被并项独有的职责(比如只在旧条目里补的编曲)会带过来。
+        _seen_credits = {(c.role, textutil.norm_key(c.name)) for c in keep.credits}
+        for credit in drop.credits:
+            stamp = (credit.role, textutil.norm_key(credit.name))
+            if stamp in _seen_credits:
+                continue
+            _seen_credits.add(stamp)
+            keep.credits.append(credit)
+        # 其他照片: 按地址去重后并集(照片是独立文件, 迁移条目不该丢图)。
+        if drop.photos:
+            _seen_photos = {str(p.get("url") or "") for p in keep.photos
+                            if isinstance(p, dict)}
+            for photo in drop.photos:
+                if not isinstance(photo, dict):
+                    continue
+                url = str(photo.get("url") or "")
+                if url and url in _seen_photos:
+                    continue
+                if url:
+                    _seen_photos.add(url)
+                keep.photos.append(dict(photo))
         keep.urls = {**drop.urls, **keep.urls}
         keep.source_ids = {**drop.source_ids, **keep.source_ids}
         keep.raw = {**drop.raw, **keep.raw}
