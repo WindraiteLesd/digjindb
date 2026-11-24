@@ -57,11 +57,20 @@ class TestBindFieldsGetRealChips(unittest.TestCase):
         block = self.js[i:end if end > i else i + 6000]
         self.assertIn("setBindField(k,", block)
 
-    def test_artists_and_tags_go_through_bind(self) -> None:
-        i = self.js.find('["artists", "tags", "genres"]')
+    def test_artists_go_into_credit_rows(self) -> None:
+        """艺人不再写 chip 隐藏域, 而是落进词条行的「人员」框 (m11892)."""
+        i = self.js.find('["tags", "genres"]')
         self.assertGreater(i, 0)
         block = self.js[i:i + 500]
         self.assertIn("setBindField", block)
+        self.assertNotIn('"artists"', block)
+        # 艺人落到词条行: 找一段专门处理 artists 的
+        j = self.js.find("if (s.artists)")
+        self.assertGreater(j, 0)
+        artist_block = self.js[j:j + 2000]
+        self.assertIn('[data-pair-row="credit"]', artist_block)
+        self.assertIn("addCreditPeople", artist_block)
+        self.assertIn("ensureRows(\"credit\"", artist_block)
 
     def test_bind_component_listens_for_change(self) -> None:
         i = self.pub.find("function setupBindFields(")
@@ -288,6 +297,59 @@ class TestTracksFillTheTable(unittest.TestCase):
         block = self._fn("fillTrackRows", 4200)
         self.assertIn('put("track_disc", discNo)', block)
         self.assertIn('getAttribute("data-disc")', block)
+
+
+class TestArtistsGoIntoCreditRows(unittest.TestCase):
+    """``artists`` 要落进词条行的「人员」框, 不是只改上方预览 (m11892).
+
+    用户实测: 粘贴 infobox 后上方预览出现 "艺人 N_dog / 艺人 Letsu",
+    下方词条行却一行都没有 —— 看不出这些人从哪来, 也没法给它们填职责。
+    """
+
+    def setUp(self) -> None:
+        self.js = _js(INFOBOX_JS)
+
+    def _artist_block(self) -> str:
+        i = self.js.find("if (s.artists)")
+        self.assertGreater(i, 0)
+        return self.js[i:i + 2400]
+
+    def test_artists_do_not_go_through_bind(self) -> None:
+        i = self.js.find('["tags", "genres"]')
+        self.assertGreater(i, 0)
+        block = self.js[i:i + 400]
+        self.assertIn("setBindField", block)
+        self.assertNotIn('"artists"', block)
+
+    def test_artists_are_added_to_credit_row(self) -> None:
+        block = self._artist_block()
+        self.assertIn("addCreditPeople", block)
+        self.assertIn('[data-pair-row="credit"]', block)
+
+    def test_missing_row_is_created(self) -> None:
+        block = self._artist_block()
+        self.assertIn('ensureRows("credit"', block)
+
+    def test_existing_people_are_not_duplicated(self) -> None:
+        """已经在词条里的人不再重复加一行。"""
+        block = self._artist_block()
+        self.assertIn("credit-person-chip", block)
+        self.assertIn("!covered[one]", block)
+
+    def test_summary_base_is_replaced(self) -> None:
+        """上方预览的基序换成 infobox 的 artists, 否则会残留旧数据的人。"""
+        block = self._artist_block()
+        self.assertIn('setAttribute("data-artists"', block)
+
+    def test_role_left_empty(self) -> None:
+        """职责留空 -> 后端 role 兜底成 artist; 写「艺人」会排到末尾。"""
+        block = self._artist_block()
+        self.assertIn("credit_role", block)
+        self.assertIn('String(roleInput.value || "").trim()', block)
+
+    def test_summary_refreshed_after_fill(self) -> None:
+        block = self._artist_block()
+        self.assertIn('fire(anyRole, "input")', block)
 
 
 if __name__ == "__main__":
