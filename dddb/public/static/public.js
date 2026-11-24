@@ -502,8 +502,10 @@
       }
     }
 
-    function save() {
-      if (!dirty) { return; }
+    function save(force) {
+      /* force: 用户点了「保存草稿」按钮 —— 那是明确意图, 不受 dirty 闸门限制
+         (比如刚打开页面什么都没改, 也想把当前内容留一份)。 */
+      if (!force && !dirty) { return; }
       var values;
       try {
         values = collect();
@@ -512,16 +514,21 @@
          而 JSON 键序是 action / at / values, 切出来只剩 action ——
          第一次保存之后指纹永远相同, 后续修改全被跳过(m12045)。 */
       var stamp = snapshotOf(values);
-      if (!stamp || stamp === lastSaved) { return; }
+      if (!force && (!stamp || stamp === lastSaved)) { return; }
       lastSaved = stamp;
+      dirty = false;
       try {
         window.localStorage.setItem(KEY, JSON.stringify({
           action: action, at: Date.now(), values: values
         }));
         if (bar) {
-          bar.textContent = "草稿已自动保存 " + new Date().toLocaleTimeString();
+          bar.textContent = "草稿已保存 " + new Date().toLocaleTimeString();
         }
-      } catch (err) { /* 隐私模式 / 超限: 静默 */ }
+        return true;
+      } catch (err) {
+        /* 隐私模式 / 超限: 静默 */
+        return false;
+      }
     }
 
     function scheduleSave() {
@@ -555,10 +562,12 @@
         childList: true, subtree: true
       });
     }
-    /* 防抖 1.2 秒 + 打完字立刻刷新 = 草稿还没落地。离开页面前补一次同步写盘。 */
-    window.addEventListener("beforeunload", save);
+    /* 防抖 1.2 秒 + 打完字立刻刷新 = 草稿还没落地。离开页面前补一次同步写盘。
+       注意要包一层调用: 直接把 save 交给 addEventListener 会把 Event 当成
+       force 传进去, 于是每次离开页面都无条件写盘(没改过也写)。 */
+    window.addEventListener("beforeunload", function () { save(false); });
     document.addEventListener("visibilitychange", function () {
-      if (document.visibilityState === "hidden") { save(); }
+      if (document.visibilityState === "hidden") { save(false); }
     });
     /* 真正提交了就不该再留着草稿: 保存成功会跳转, 失败也会带着提交值
        重新渲染这一页(那次加载会因为"草稿与页面一致"自动清掉)。 */
@@ -567,6 +576,16 @@
       lastSaved = "";
       dirty = false;
     });
+
+    /* 手动「保存草稿」: 不必等 1.2 秒防抖, 也不用先改过东西。 */
+    var saveBtn = document.querySelector("[data-draft-save]");
+    if (saveBtn) {
+      saveBtn.addEventListener("click", function (e) {
+        e.preventDefault();
+        if (timer) { window.clearTimeout(timer); timer = null; }
+        if (!save(true) && bar) { bar.textContent = "保存草稿失败(浏览器不允许本地存储)"; }
+      });
+    }
 
     // 有草稿就提示恢复(不自动套用)
     try {
