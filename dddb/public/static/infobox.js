@@ -149,6 +149,98 @@
     return true;
   }
 
+  /* 曲目表: 用户看到的是**下边的表格**, 不是「整段粘贴」那个折叠框。
+     只往粘贴框里写, 表格还是空的 —— 用户会以为曲目没填进去(实测反馈)。
+     所以跟词条/外链一样走「按需补行」: 缺行就点该碟的「＋ 添加歌曲」,
+     多出来的旧行删掉, 再逐格填值。全部塞进第 1 张碟(infobox 没有碟信息)。
+     返回填进去的行数; 页面上没有曲目表(老页面)时返回 0, 由调用方退回粘贴框。 */
+  function fillTrackRows(tracks) {
+    var blocks = $$(".disc-block");
+    if (!blocks.length) { return 0; }
+    var bodyOf = function (block) {
+      return block.querySelector("tbody") || block.querySelector("[data-disc-body]");
+    };
+    var rowsOf = function (block) {
+      var body = bodyOf(block);
+      return body ? $$("tr.track-row", body) : [];
+    };
+
+    // infobox 的曲目行是**一维**的, 没有碟号字段。但导出时音轨号是**按碟重新
+    // 从 1 开始**的(见 IB.build), 所以「音轨号不再递增」就是碟边界 —— 用这个
+    // 把曲目切成若干组, 一组对应一张碟。只有一张碟的页面则全部归到一组并改成
+    // 连续编号, 否则会出现 1..11,1..11 这种重复音轨号。
+    var singleDisc = blocks.length <= 1;
+    var groups = [];
+    if (singleDisc) {
+      groups.push(tracks.map(function (t, i) {
+        return { track: t, index: i + 1 };
+      }));
+    } else {
+      var cur = [];
+      var lastIndex = 0;
+      tracks.forEach(function (t) {
+        var n = Number(t.index) || 0;
+        if (cur.length && n && n <= lastIndex) {
+          groups.push(cur);
+          cur = [];
+        }
+        cur.push({ track: t, index: n || cur.length + 1 });
+        lastIndex = n || lastIndex;
+      });
+      if (cur.length) { groups.push(cur); }
+    }
+
+    var filledCount = 0;
+    groups.forEach(function (group, gi) {
+      // 组比碟多时, 溢出的都并进最后一张碟, 不丢曲目
+      var block = blocks[Math.min(gi, blocks.length - 1)];
+      if (!block) { return; }
+      var add = block.querySelector('[data-track-add="1"]');
+      var rows = rowsOf(block);
+
+      for (var guard = 0; guard < 200 && rows.length < group.length && add; guard++) {
+        add.click();
+        rows = rowsOf(block);
+      }
+      for (var i = rows.length - 1; i >= group.length; i--) {
+        var del = rows[i].querySelector('[data-track-del="1"]');
+        if (rows[i].parentNode) {
+          if (del) { del.click(); } else { rows[i].remove(); }
+        }
+      }
+      rows = rowsOf(block);
+
+      var discNo = block.getAttribute("data-disc") || String(gi + 1);
+      group.forEach(function (item, i) {
+        var row = rows[i];
+        if (!row) { return; }
+        var t = item.track;
+        var put = function (name, value) {
+          var input = row.querySelector('[name="' + name + '"]');
+          if (!input) { return; }
+          input.value = value == null ? "" : String(value);
+          fire(input, "input");
+          fire(input, "change");
+        };
+        put("track_index", item.index);
+        put("track_title", t.title || "");
+        // 艺人列用「、」分隔(_track_row_html 与后端 split_list 都认这个)
+        var artists = t.artists;
+        if (Array.isArray(artists)) { artists = artists.join("、"); }
+        put("track_artists", artists || "");
+        put("track_duration", t.duration || "");
+        // infobox 没有这几项的来源, 清空旧值 —— 否则"整份替换"会残留上一张碟的内容
+        put("track_subtitle", "");
+        put("track_title_zh", "");
+        put("track_lang", "");
+        put("track_genre", "");
+        put("track_disc", discNo);
+        filledCount += 1;
+      });
+    });
+    return filledCount;
+  }
+
   function ibMsg() { return $("[data-infobox-msg]"); }
 
   // 把 infobox 里的 cover 地址真的存成封面.
@@ -267,17 +359,25 @@
       filled.push("词条 " + d.credits.length);
     }
 
-    // 曲目: 用「整段粘贴」模式最省事
-    var paste = document.querySelector('[name="track_paste"]');
-    if (paste && d.tracks.length) {
-      paste.value = d.tracks.map(function (t) {
-        var line = t.index + ". " + t.title;
-        if (t.duration) { line += " [" + t.duration + "]"; }
-        if (t.artists) { line += " / " + t.artists; }
-        return line;
-      }).join("\n");
-      paste.dispatchEvent(new Event("input", {bubbles: true}));
-      filled.push("曲目 " + d.tracks.length);
+    // 曲目: 优先**直接填进下方曲目表的行**(用户看到的就是这张表);
+    // 老页面没有曲目表时退回「整段粘贴」文本框。
+    if (d.tracks.length) {
+      var rowsFilled = fillTrackRows(d.tracks);
+      if (rowsFilled) {
+        filled.push("曲目 " + rowsFilled);
+      } else {
+        var paste = document.querySelector('[name="track_paste"]');
+        if (paste) {
+          paste.value = d.tracks.map(function (t) {
+            var line = t.index + ". " + t.title;
+            if (t.duration) { line += " [" + t.duration + "]"; }
+            if (t.artists) { line += " / " + t.artists; }
+            return line;
+          }).join("\n");
+          fire(paste, "input");
+          filled.push("曲目 " + d.tracks.length);
+        }
+      }
     }
 
     if (d.description && setField("description", d.description)) {
