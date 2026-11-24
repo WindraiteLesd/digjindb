@@ -70,9 +70,16 @@ class TestPeopleChips(unittest.TestCase):
     def test_hidden_artists_field(self) -> None:
         self.assertIn('name="artists"', self.credits)
 
-    def test_artist_picker_present(self) -> None:
-        self.assertIn("people-picker", self.credits)
-        self.assertIn("people-search", self.credits)
+    def test_artist_summary_present(self) -> None:
+        """上方是"下方词条合并后的效果"(只读), 不再有搜索框(用户要求 m11474)."""
+        self.assertIn("people-chips is-summary", self.credits)
+        self.assertIn("person-chip", self.credits)
+        self.assertNotIn("people-picker", self.credits)
+        self.assertNotIn("people-search", self.credits)
+
+    def test_candidate_pool_kept_for_rows(self) -> None:
+        """候选池仍在页面里 —— 词条行的人员框要靠它联想。"""
+        self.assertIn("people-suggest-list", self.credits)
         self.assertIn("person-suggest", self.credits)
 
     def test_credits_rows_still_there(self) -> None:
