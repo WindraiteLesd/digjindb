@@ -545,7 +545,7 @@ def layout(
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
 <title>{esc(title)} · {esc(ctx.site_name)}</title>
-<link rel="stylesheet" href="/static/public.css?v=73">
+<link rel="stylesheet" href="/static/public.css?v=74">
 <!-- ?v=2: 图标换过, 但静态资源被 CF/浏览器缓存 1 天, 加版本号强制刷新 -->
 <link rel="icon" href="/static/favicon.svg?v=2" type="image/svg+xml">
 <!-- 唯一的脚本: 同源外链, 只做渐进增强(CSP 只给 script-src 'self') -->
@@ -4899,13 +4899,18 @@ def edit_album_page(
                    else i18n.translate("edit.album", ctx.lang))
     _cancel_href = "/edit" if creating else "/album/{}".format(
         quote_segment(key))
+    # 专辑地址标识(key)。它是内部主键, 也是 /album/<key> 里那一段, 建好后
+    # 不再变(编辑页没有这个字段)。99% 的人根本不该碰它, 所以折进「高级」
+    # 里, 只有想自定义网址的人才展开(用户 m13013: 选「收起来」)。
     _key_field = (
-        '<label class="field auth-field"><span>编号 / 短名'
-        '<span class="field-hint">留空自动生成</span></span>'
+        '<details class="edit-advanced">'
+        '<summary>高级：自定义专辑地址标识</summary>'
+        '<label class="field auth-field"><span>专辑地址标识'
+        '<span class="field-hint">留空会按「标题｜社团｜年份」生成; '
+        '建好后不再变, 网址里的这一段就是它</span></span>'
         '<input type="text" name="album_key" value="{}"'
-        ' placeholder="留空自动生成"></label>'.format(esc(key))
-        if creating else ""
-    )
+        ' placeholder="留空自动生成"></label></details>'
+    ).format(esc(key)) if creating else ""
     notice_html = f'<div class="form-error" role="alert">{esc(notice)}</div>' if notice else ""
     # 校验错误统一列在这里: 有些错误(词条/外链/曲目行)没有对应的单个输入框,
     # 只靠红字会看不见 —— 列出来保证用户知道到底哪儿不对。
