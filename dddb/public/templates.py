@@ -549,7 +549,7 @@ def layout(
 <!-- ?v=2: 图标换过, 但静态资源被 CF/浏览器缓存 1 天, 加版本号强制刷新 -->
 <link rel="icon" href="/static/favicon.svg?v=2" type="image/svg+xml">
 <!-- 唯一的脚本: 同源外链, 只做渐进增强(CSP 只给 script-src 'self') -->
-<script src="/static/public.js?v=63" defer></script>
+<script src="/static/public.js?v=64" defer></script>
 <script src="/static/cover-crop.js?v=6" defer></script>
 <script src="/static/infobox.js?v=8" defer></script>
 </head>
@@ -1541,24 +1541,39 @@ def album_detail_page(
                     _credit_pairs.append((_person, _text_label))
 
     # ---- 与编辑页完全相同的合并算法 ----
-    _chip_specs: list[tuple[str, str]] = [
-        (_name, "") for _name in _artist_names]
-    for _person, _role in _credit_pairs:
-        _hit = next((_i for _i, (_a, _r) in enumerate(_chip_specs)
-                     if _a == _person), -1)
-        if _hit >= 0:
-            if not _chip_specs[_hit][1] and _role:
-                _chip_specs[_hit] = (_person, _role)   # 补职责, 仍一条
-            continue                                    # 已有职责 -> 跳过
-        _chip_specs.append((_person, _role))
+    # 一个人挂多个职责时**收齐全部职责**, 显示成 `A/B · 人名`
+    # (用户 m12697: 只留第一条会漏掉其他职责; 编辑页与详情页必须同源)
+    _chip_specs: list[tuple[str, list[str]]] = []
+    _chip_index: dict[str, int] = {}
 
-    def _person_chip(person: str, role: str) -> str:
+    def _chip_slot(person: str) -> list[str]:
+        _idx = _chip_index.get(person)
+        if _idx is None:
+            _chip_index[person] = len(_chip_specs)
+            _chip_specs.append((person, []))
+            return _chip_specs[-1][1]
+        return _chip_specs[_idx][1]
+
+    for _name in _artist_names:
+        _chip_slot(_name)
+    for _person, _role in _credit_pairs:
+        _roles = _chip_slot(_person)
+        if _role and _role not in _roles:
+            _roles.append(_role)
+    # 注意: 这里**不**按 sort_role 重排 —— 详情页的职责已经是
+    # ``group_credits`` 排序后的**显示名**(如「编曲」), 拿显示名去查
+    # ``ROLE_ORDER``(存的是 `arrange` 这类代码) 全查不到, 反而会乱序。
+    # 顺序本来就与编辑页一致: 两边都源自 ROLE_ORDER 对代码的排序。
+
+    def _person_chip(person: str, roles: Sequence[str]) -> str:
         """一个制作人员按钮.
 
         有实体卡片(entities 里有这个艺人)时用 ``_entity_card`` —— 它自带
         **悬停详情 + 关注表单**(点按钮可以关注); 没有实体的人才退化成只读 chip。
         外观由 CSS 统一, 两种都是同一种胶囊按钮。
         """
+        role = "/".join(
+            _r for _r in (str(_one or "").strip() for _one in roles) if _r)
         _kind = role if role else "艺人"
         _item = _artist_entities.get(person)
         if _item is not None:
@@ -5248,34 +5263,55 @@ def edit_album_page(
             if _one and _one not in _all_people:
                 _all_people.append(_one)
 
-    def _people_chip(name: str, role: str = "") -> str:
+    def _people_chip(name: str, roles: Sequence[str] = ()) -> str:
         """**只读**人员按钮: 显示「职责 · 人名」(与详情页一致).
 
         用户要求(m11474): 上方只显示下方词条添加后的**效果**, 不是输入区。
         所以这里不带 × 删除按钮, 也不参与添加 —— 编辑入口只有下方词条行。
+
+        一个人挂多个职责时**并成一条**(用户 m12697): 显示 `制作/作編曲 · 人名`,
+        职责用 `/` 连接 —— 与词条行里 `制作/作編曲/母带` 这种写法同形。
+        职责文字走 :func:`role_label` —— 库里的 ``arrange`` 要显示成「编曲」,
+        否则编辑页是 ``arrange/artist``、详情页是 ``艺人/编曲``, 同一张碟两副样子。
         """
         _eid = 0
         try:
             _eid = int((bind_ids.get("artist") or {}).get(name) or 0)
         except (TypeError, ValueError):
             _eid = 0
-        _role_text = str(role or "").strip()
+        _raw_roles = [str(_one or "").strip() for _one in roles
+                      if str(_one or "").strip()]
+        _raw_text = "/".join(_raw_roles)
+        _role_text = "/".join(role_label(_one) for _one in _raw_roles)
         _kind = _role_text if _role_text else "艺人"
         return (
             '<span class="person-chip is-static" data-person="{name}"'
             ' data-role="{role}" data-entity-id="{eid}">'
             '<span class="person-kind">{kind}</span>'
             '<b>{name}</b></span>'.format(
-                name=esc(name), eid=_eid, role=esc(_role_text),
+                name=esc(name), eid=_eid, role=esc(_raw_text),
                 kind=esc(_kind)))
 
     # 上方按钮 = 艺人 + 每条词条的「职责 · 人名」(与详情页**同源规则**)
     #   * circle 类词条跳过 —— 社团已在标题后显示, 详情页也这么做
+    #   * 同一个人挂多个职责时**收齐所有职责**, 显示成 `A/B · 人名`
+    #     (用户 m12697: 只取第一条会漏掉其他职责)
     _chip_circle_tokens = {"circle", "社团", "社團", "サークル"}
-    _chip_specs: list[tuple[str, str]] = []
+    _chip_specs: list[tuple[str, list[str]]] = []
+    _chip_index: dict[str, int] = {}
+
+    def _chip_slot(person: str) -> list[str]:
+        """拿到（必要时新建）某个人的职责列表."""
+        _idx = _chip_index.get(person)
+        if _idx is None:
+            _chip_index[person] = len(_chip_specs)
+            _chip_specs.append((person, []))
+            return _chip_specs[-1][1]
+        return _chip_specs[_idx][1]
+
     for _name in [str(a).strip() for a in (album.get("artists") or [])
                   if str(a).strip()]:
-        _chip_specs.append((_name, ""))
+        _chip_slot(_name)
     for _row in credit_rows:
         _role_text = str(_row.get("role") or "").strip()
         if (_role_text.lower() in _chip_circle_tokens
@@ -5285,15 +5321,16 @@ def edit_album_page(
             _one = _part.strip()
             if not _one:
                 continue
-            # 同一人不重复(优先保留已有职责)
-            if any(_one == _a and not _r for _a, _r in _chip_specs):
-                _chip_specs = [(_a, _role_text if _a == _one and not _r else _r)
-                               for _a, _r in _chip_specs]
-                continue
-            if any(_one == _a for _a, _r in _chip_specs):
-                continue
-            _chip_specs.append((_one, _role_text))
-    _people_chips = "".join(_people_chip(_n, _r) for _n, _r in _chip_specs)
+            _roles = _chip_slot(_one)
+            if _role_text and _role_text not in _roles:
+                _roles.append(_role_text)
+    # 职责顺序按 sort_role 排 —— 详情页的 chips 来自 group_credits 的
+    # ROLE_ORDER 排序, 编辑页若按词条行序显示, 保存后刷新顺序就变了
+    # (实测 `esse|2026`: 编辑页 `arrange/artist`, 详情页 `艺人/编曲`)。
+    for _person, _roles in _chip_specs:
+        _roles.sort(key=sort_role)
+    _people_chips = "".join(
+        _people_chip(_n, _roles) for _n, _roles in _chip_specs)
 
     # 词条行: 职责输入 + 人员选择按钮(点开从上方按钮里选)
     def _credit_row(row: Mapping[str, Any]) -> str:
@@ -5349,13 +5386,19 @@ def edit_album_page(
     # 作为具有添加功能的一部分」。所以这里既没有搜索框, 也没有 × 删除。
     #   汇总规则与详情页同源: 艺人打头(职责空 -> 显示「艺人」), 词条补职责。
     _base_people = "\n".join(_all_people)
+    # 职责代码 -> 显示名的映射, 给 JS 重建 chip 用 —— 前端 `rebuildSummary()`
+    # 拿到的是词条框里的**原始代码**(`arrange`), 不查表就会显示成 `arrange`,
+    # 而服务端渲染的是「编曲」, 一次交互后样式就变了。
+    _role_labels_json = json.dumps(ROLE_LABELS, ensure_ascii=False,
+                                   sort_keys=True)
     _cards["credits"] = _card(
         "credits",
         '<p class="field-hint summary-hint">下方词条合并后的结果（只读）</p>'
         # data-people 必须**最后**一个属性: 多个测试用
         # 'data-people="artists">' 这段字面量来截取 chip 区。
         + '<div class="people-chips is-summary" data-artists="{}"'
-          ' data-people="artists">'.format(esc(_base_people))
+          ' data-role-labels="{}" data-people="artists">'.format(
+              esc(_base_people), esc(_role_labels_json))
         + _people_chips
         + "</div>"
         + '<input type="hidden" name="artists" value="{}">'.format(
