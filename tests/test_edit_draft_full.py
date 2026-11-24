@@ -39,7 +39,7 @@ class TestDraftTriggers(unittest.TestCase):
         cls.body = _block(cls.src, "setupEditDraft")
 
     def test_listens_click(self) -> None:
-        self.assertIn('form.addEventListener("click", scheduleSave)', self.body)
+        self.assertIn('form.addEventListener("click", markDirty)', self.body)
 
     def test_observes_dom_changes(self) -> None:
         self.assertIn("MutationObserver", self.body)
@@ -51,11 +51,11 @@ class TestDraftTriggers(unittest.TestCase):
         self.assertIn('typeof window.MutationObserver === "function"', self.body)
 
     def test_still_listens_input_and_change(self) -> None:
-        self.assertIn('form.addEventListener("input", scheduleSave)', self.body)
-        self.assertIn('form.addEventListener("change", scheduleSave)', self.body)
+        self.assertIn('form.addEventListener("input", markDirty)', self.body)
+        self.assertIn('form.addEventListener("change", markDirty)', self.body)
 
     def test_debounce_shared(self) -> None:
-        """四个监听走同一个 scheduleSave, 各自 setTimeout 会互相覆盖。"""
+        """所有入口走同一个 scheduleSave, 各自 setTimeout 会互相覆盖。"""
         self.assertIn("function scheduleSave()", self.body)
         self.assertIn("window.clearTimeout(timer)", self.body)
 
@@ -69,10 +69,61 @@ class TestNoSelfTriggerLoop(unittest.TestCase):
 
     def test_compares_stamp_before_writing(self) -> None:
         self.assertIn("lastSaved", self.body)
-        self.assertIn("if (stamp === lastSaved) { return; }", self.body)
+        self.assertIn("if (!stamp || stamp === lastSaved) { return; }", self.body)
 
-    def test_stamp_excludes_timestamp(self) -> None:
-        self.assertIn('payload.indexOf(\',"at":\')', self.body)
+    def test_stamp_is_values_only(self) -> None:
+        """指纹只由表单值算出来。
+
+        曾经的写法是 `payload.slice(0, payload.indexOf(',"at":'))`, 但 JSON
+        键序是 action / at / values, 切出来只剩 action —— 第一次保存后指纹
+        永远相同, 后面改的全被跳过(用户 m12045: 刷新后草稿丢失)。
+        """
+        self.assertNotIn('payload.indexOf(\',"at":\')', self.body)
+        self.assertIn("function snapshotOf(values)", self.body)
+        self.assertIn("JSON.stringify({ action: action, values: values })",
+                      self.body)
+
+
+class TestDirtyGate(unittest.TestCase):
+    """载入时 chip 重建会触发 MutationObserver, 不能因此用页面原值覆盖草稿。
+
+    这是「刷新后草稿丢失」的直接成因: setupBindFields / setupPeopleChips
+    在 setupEditDraft 之后跑, 它们重建 chip 是 DOM 变更, 若"变更就存",
+    1.2 秒后草稿就被页面原值顶掉了。
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.body = _block(JS.read_text(encoding="utf-8"), "setupEditDraft")
+
+    def test_save_is_gated_by_dirty(self) -> None:
+        self.assertIn("var dirty = false;", self.body)
+        self.assertIn("if (!dirty) { return; }", self.body)
+
+    def test_mutations_do_not_mark_dirty(self) -> None:
+        self.assertIn("function onMutation() {", self.body)
+        self.assertIn("if (dirty) { scheduleSave(); }", self.body)
+        # MutationObserver 走 onMutation, 不能直接挂 scheduleSave
+        self.assertIn("new window.MutationObserver(onMutation)", self.body)
+
+    def test_user_events_mark_dirty(self) -> None:
+        for ev in ("input", "change", "click", "keydown", "drop"):
+            self.assertIn('form.addEventListener("%s", markDirty)' % ev,
+                          self.body)
+
+    def test_flush_on_unload(self) -> None:
+        """防抖 1.2 秒, 打完字立刻刷新就来不及写 —— 离开前补一次。"""
+        self.assertIn('window.addEventListener("beforeunload", save)', self.body)
+        self.assertIn("visibilitychange", self.body)
+
+    def test_submit_clears_draft(self) -> None:
+        self.assertIn('form.addEventListener("submit"', self.body)
+        self.assertIn("window.localStorage.removeItem(KEY)", self.body)
+
+    def test_identical_draft_is_dropped(self) -> None:
+        """草稿和页面当前值一样时不必提示恢复。"""
+        self.assertIn("JSON.stringify(saved.values) === JSON.stringify(collect())",
+                      self.body)
 
 
 class TestRestoreFitsRows(unittest.TestCase):
