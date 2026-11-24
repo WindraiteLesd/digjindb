@@ -486,6 +486,24 @@
       return data;
     }
 
+    /* 有些状态挂在没有 name 的元素上(典型是封面预览的 data URL ——
+       给它 name 会让表单白传一份最大 2MB 的 base64)。草稿的 extra 槽
+       专门收这类值, 避免「草稿不存储封面」(用户 m12280)。 */
+    function collectExtra() {
+      var extra = {};
+      var cover = document.getElementById("cover-data");
+      if (cover && cover.value) { extra.cover_data = cover.value; }
+      return extra;
+    }
+
+    function applyExtra(extra) {
+      var cover = document.getElementById("cover-data");
+      if (!cover || !extra || !extra.cover_data) { return; }
+      cover.value = String(extra.cover_data);
+      /* 派发 change: setupCoverPick 监听它把图贴回 .cover-preview-img */
+      cover.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+
     var lastSaved = "";
     /* 页面刚加载时 setupBindFields / setupPeopleChips 等会重建 chip、
        改写隐藏域 —— 这些 DOM 变更会被下面的 MutationObserver 看到。
@@ -494,9 +512,9 @@
        所以只有用户真的动过表单(dirty)才允许写盘。 */
     var dirty = false;
 
-    function snapshotOf(values) {
+    function snapshotOf(values, extra) {
       try {
-        return JSON.stringify({ action: action, values: values });
+        return JSON.stringify({ action: action, values: values, extra: extra });
       } catch (err) {
         return "";
       }
@@ -506,20 +524,21 @@
       /* force: 用户点了「保存草稿」按钮 —— 那是明确意图, 不受 dirty 闸门限制
          (比如刚打开页面什么都没改, 也想把当前内容留一份)。 */
       if (!force && !dirty) { return; }
-      var values;
+      var values, extra;
       try {
         values = collect();
+        extra = collectExtra();
       } catch (err) { return; }
       /* 指纹只取「值」: 之前误用 payload.slice(0, indexOf(',"at":')),
          而 JSON 键序是 action / at / values, 切出来只剩 action ——
          第一次保存之后指纹永远相同, 后续修改全被跳过(m12045)。 */
-      var stamp = snapshotOf(values);
+      var stamp = snapshotOf(values, extra);
       if (!force && (!stamp || stamp === lastSaved)) { return; }
       lastSaved = stamp;
       dirty = false;
       try {
         window.localStorage.setItem(KEY, JSON.stringify({
-          action: action, at: Date.now(), values: values
+          action: action, at: Date.now(), values: values, extra: extra
         }));
         if (bar) {
           bar.textContent = "草稿已保存 " + new Date().toLocaleTimeString();
@@ -598,7 +617,8 @@
          提示了反而让人以为有没提交的改动。 */
       var same = false;
       try {
-        same = JSON.stringify(saved.values) === JSON.stringify(collect());
+        same = snapshotOf(collect(), collectExtra()) ===
+               snapshotOf(saved.values, saved.extra);
       } catch (err) { same = false; }
       if (same) {
         try { window.localStorage.removeItem(KEY); } catch (err2) { /* 忽略 */ }
@@ -735,6 +755,7 @@
           });
         });
         bar.textContent = "草稿已恢复";
+        applyExtra(saved.extra);
         if (restore.parentNode) { restore.parentNode.removeChild(restore); }
       });
       bar.parentNode.appendChild(restore);
@@ -1667,6 +1688,7 @@
     var thumb = document.querySelector(".cover-fallback");
     var img = document.querySelector(".cover-preview-img");
     var word = thumb ? thumb.querySelector("span") : null;
+    var store = document.getElementById("cover-data");
     if (!input) { return; }
 
     button.addEventListener("click", function (e) {
@@ -1691,12 +1713,43 @@
       // 但 createObjectURL 的 blob: 未必放行(踩过这个坑)。
       var reader = new FileReader();
       reader.onload = function () {
-        img.src = String(reader.result || "");
+        var data = String(reader.result || "");
+        img.src = data;
         img.hidden = false;
         if (word) { word.hidden = true; }
+        /* 草稿要能记住选过哪张图(用户 m12280)。file input 的值存不进
+           localStorage, 所以把 data URL 也写进隐藏域 —— 它随表单一起被
+           collect() 收走, 刷新后靠它把预览重新贴回来。
+           注意这**不是**提交封面的通路: 服务端只认 multipart 的 cover。
+           localStorage 一个源通常只有 5MB, 2MB 的图 base64 后近 2.7MB,
+           所以超过上限就不写(预览仍然显示, 只是刷新后要重新选)。 */
+        if (store) {
+          if (data.length <= 1500000) {
+            store.value = data;
+          } else {
+            store.value = "";
+            if (hint) {
+              hint.textContent += "（图太大，草稿里无法保留这张预览）";
+            }
+          }
+          store.dispatchEvent(new Event("input", { bubbles: true }));
+        }
       };
       reader.readAsDataURL(file);
     });
+
+    /* 草稿恢复时只有隐藏域被写值, 预览不会自己出现 —— 监听 change
+       把 data URL 贴回 <img>。恢复逻辑同时派发 input 与 change。 */
+    if (store) {
+      store.addEventListener("change", function () {
+        var data = String(store.value || "");
+        if (!data || !img) { return; }
+        img.src = data;
+        img.hidden = false;
+        if (word) { word.hidden = true; }
+        if (hint) { hint.textContent = "已恢复草稿里的封面预览"; }
+      });
+    }
   }
 
   function setupCoverUpload() {
