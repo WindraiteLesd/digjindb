@@ -106,7 +106,9 @@ class TestInfoCard(unittest.TestCase):
         inner = m.group(1)
         self.assertIn("person-chip", inner, "艺人要显示为按钮")
         self.assertIn('name="artists"', inner, "要有隐藏字段提交")
-        self.assertIn("people-picker", inner, "要有艺人候选")
+        self.assertIn("people-suggest-list", inner, "要有艺人候选")
+        # 上方只读, 没有搜索框(用户要求 m11474)
+        self.assertNotIn("people-picker", inner)
 
 
 class TestCustomLayout(unittest.TestCase):
