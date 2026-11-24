@@ -25,7 +25,10 @@ class TestCoverByteCache(unittest.TestCase):
 
         from dddb.public.site import PublicSite
 
-        source = inspect.getsource(PublicSite._do_album_cover)
+        # 写盘逻辑在 _store_cover_bytes 里(上传与按 URL 抓共用), 所以要
+        # 连它一起看 —— 只看处理函数会漏掉真正清缓存的那段代码。
+        source = (inspect.getsource(PublicSite._do_album_cover)
+                  + inspect.getsource(PublicSite._store_cover_bytes))
         self.assertIn("invalidate", source, "要清 data 列缓存")
         self.assertIn("drop_cover_cache", source,
                       "要清封面字节缓存(否则换图后仍显示旧图)")
