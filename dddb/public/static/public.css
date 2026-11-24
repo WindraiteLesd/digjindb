@@ -2139,6 +2139,15 @@ tr.track-item.is-open .track-toggle { transform: rotate(90deg); }
   background: rgba(229, 72, 77, .22);
   color: var(--danger, #e5484d);
 }
+/* 只读汇总(制作人员卡片上方): 不是按钮, 没有删除叉.
+   用户要求 m11474: 上面只显示下方词条添加后的效果。 */
+.people-chips.is-summary { padding: 0 0 4px; }
+.person-chip.is-static {
+  cursor: default;
+  padding-right: 9px;
+}
+/* 汇总区标题用的说明文字 */
+.edit-card-credits .summary-hint { margin: 0 0 6px; }
 
 /* 艺人候选: 搜索 + 点选 */
 .people-picker { position: relative; margin: 0 0 10px; }
