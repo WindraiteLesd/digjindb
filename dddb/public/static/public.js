@@ -113,12 +113,16 @@
      * 隐藏字段 name="artists" 保存**名称**(换行分隔), 与后端解析一致
      ========================================================================== */
   function setupPeopleChips() {
+    /* 上方是**只读汇总**(用户要求 m11474: 只显示下方词条的效果, 不是输入区)。
+       所以这里没有搜索框 / 候选点选 / × 删除 —— 唯一的编辑入口是下方词条行。
+       保留的职责只有两件:
+         1. 把 hidden[name=artists] 的值渲染成一排 chip (服务端已渲染, 这里兜底)
+         2. 监听 hidden 的 change 重建 chip (infobox 填入 / 词条变更后刷新汇总)
+    */
     var host = document.querySelector('[data-people="artists"]');
     if (!host) { return; }
     var card = host.closest(".edit-card") || document;
     var hidden = card.querySelector('input[type="hidden"][name="artists"]');
-    var search = card.querySelector(".people-search");
-    var list = card.querySelector(".people-suggest-list");
 
     function names() {
       var out = [];
@@ -130,8 +134,23 @@
       return out;
     }
 
-    /* 外部改写艺术家隐藏域(infobox 填入) -> 重建上方按钮.
-       否则 sync() 会用**空**的按钮列表把 hidden 覆盖回空。 */
+    function makeChip(name, role) {
+      var chip = document.createElement("span");
+      chip.className = "person-chip is-static";
+      chip.setAttribute("data-person", name);
+      chip.setAttribute("data-role", role || "");
+      chip.setAttribute("data-entity-id", "0");
+      var kind = document.createElement("span");
+      kind.className = "person-kind";
+      kind.textContent = role || "艺人";
+      var bold = document.createElement("b");
+      bold.textContent = name;
+      chip.appendChild(kind);
+      chip.appendChild(bold);
+      return chip;
+    }
+
+    /* 用 hidden 里的名字重建 chip; 已有 chip 保留其 data-role(职责由服务端合并) */
     function readHidden() {
       if (!hidden) { return; }
       var wanted = [];
@@ -139,156 +158,25 @@
         var one = part.trim();
         if (one && wanted.indexOf(one) === -1) { wanted.push(one); }
       });
-      if (!wanted.length) { return; }
-      var have = names();
-      if (wanted.join("\n") === have.join("\n")) { return; }
+      var existing = {};
+      Array.prototype.forEach.call(
+        host.querySelectorAll(".person-chip"), function (chip) {
+          existing[chip.getAttribute("data-person") || ""] = chip;
+        });
+      // 删掉不再需要的
+      Object.keys(existing).forEach(function (name) {
+        if (wanted.indexOf(name) === -1) { existing[name].remove(); }
+      });
+      // 补上缺的(已有职责的 chip 保持原样)
       wanted.forEach(function (one) {
-        if (have.indexOf(one) === -1) { host.appendChild(makeChip(one, 0)); }
-      });
-      sync();
-    }
-
-    function sync() {
-      if (hidden) { hidden.value = names().join("\n"); }
-      // 已加进按钮的候选不再显示
-      if (!list) { return; }
-      var current = names().map(function (one) { return one.toLowerCase(); });
-      Array.prototype.forEach.call(
-        list.querySelectorAll(".person-suggest"), function (item) {
-          var name = (item.getAttribute("data-name") || "").toLowerCase();
-          item.hidden = current.indexOf(name) !== -1;
-        });
-    }
-
-    function makeChip(name, entityId) {
-      var chip = document.createElement("span");
-      chip.className = "person-chip";
-      chip.setAttribute("data-person", name);
-      chip.setAttribute("data-entity-id", String(entityId || 0));
-      var kind = document.createElement("span");
-      kind.className = "person-kind";
-      kind.textContent = "艺人";
-      var bold = document.createElement("b");
-      bold.textContent = name;
-      var del = document.createElement("button");
-      del.type = "button";
-      del.className = "person-x";
-      del.setAttribute("data-person-del", "1");
-      del.setAttribute("aria-label", "移除 " + name);
-      del.textContent = "×";
-      chip.appendChild(kind);
-      chip.appendChild(bold);
-      chip.appendChild(del);
-      return chip;
-    }
-
-    function add(name, entityId) {
-      var value = String(name || "").trim();
-      if (!value) { return; }
-      if (names().indexOf(value) !== -1) { return; }   // 同名不重复加
-      host.appendChild(makeChip(value, entityId));
-      sync();
-      if (search) { search.value = ""; }
-      filter("");
-      // 加入后收起候选(用户点完就走)
-      if (list) { list.style.display = "none"; }
-    }
-
-    function filter(text) {
-      if (!list) { return; }
-      var needle = String(text || "").trim().toLowerCase().replace(/^#/, "");
-      var current = names().map(function (one) { return one.toLowerCase(); });
-      var shown = 0;
-      Array.prototype.forEach.call(
-        list.querySelectorAll(".person-suggest"), function (item) {
-          var name = (item.getAttribute("data-name") || "").toLowerCase();
-          var eid = item.getAttribute("data-entity-id") || "";
-          if (current.indexOf(name) !== -1) { item.hidden = true; return; }
-          var hit = !needle || name.indexOf(needle) !== -1 || eid === needle;
-          item.hidden = !hit;
-          if (hit) { shown += 1; }
-        });
-      list.style.display = shown ? "block" : "none";
-      list.setAttribute("data-count", String(shown));
-    }
-
-    // 点候选 -> 加入(用 mousedown: 比 click 更早, 不会被失焦/重排打断)
-    if (list) {
-      list.addEventListener("mousedown", function (e) {
-        var btn = e.target && e.target.closest
-          ? e.target.closest(".person-suggest") : null;
-        if (!btn) { return; }
-        e.preventDefault();          // 阻止输入框失焦
-        e.stopPropagation();
-        add(btn.getAttribute("data-name"),
-            parseInt(btn.getAttribute("data-entity-id") || "0", 10) || 0);
-      });
-    }
-
-    // 点 × -> 移除
-    host.addEventListener("click", function (e) {
-      var del = e.target && e.target.closest
-        ? e.target.closest("[data-person-del]") : null;
-      if (!del) { return; }
-      e.preventDefault();
-      var chip = del.closest(".person-chip");
-      if (chip && chip.parentNode) { chip.parentNode.removeChild(chip); sync(); }
-    });
-
-    // 搜索框
-    if (search) {
-      search.addEventListener("input", function () { filter(search.value); });
-      search.addEventListener("focus", function () { filter(search.value); });
-      // **不要用 blur 关闭**: 点候选按钮时输入框先失焦, 候选会在点击前消失,
-      // 表现为"点选框不出现/点不到"。关闭交给: 外部点击 + Esc + 选中后。
-      search.addEventListener("keydown", function (e) {
-        if (e.key !== "Enter" && e.keyCode !== 13) { return; }
-        e.preventDefault();                 // 不提交表单
-        // 有唯一匹配就加进去
-        var hits = [];
-        if (list) {
-          Array.prototype.forEach.call(
-            list.querySelectorAll(".person-suggest"), function (item) {
-              if (!item.hidden) { hits.push(item); }
-            });
-        }
-        if (hits.length === 1) {
-          add(hits[0].getAttribute("data-name"),
-              parseInt(hits[0].getAttribute("data-entity-id") || "0", 10) || 0);
-        } else {
-          var raw = search.value.trim();
-          if (raw) { add(raw, 0); }         // 没有候选就直接用输入的名字
-        }
-      });
-    }
-
-    // 点页面其它地方也收起(候选框是浮层)
-    if (!document.__peopleOutsideBound) {
-      document.__peopleOutsideBound = true;
-      document.addEventListener("mousedown", function (e) {
-        var target = e.target;
-        if (!target || !target.closest) { return; }
-        // 点在搜索框/候选列表内部 -> 不关(否则点候选会先被关掉)
-        if (target.closest(".people-picker")) { return; }
-        if (target.closest(".people-suggest-list")) { return; }
-        if (target.closest(".person-suggest")) { return; }
-        Array.prototype.forEach.call(
-          document.querySelectorAll(".people-suggest-list"),
-          function (one) { one.style.display = "none"; });
-      });
-      // Esc 也收起
-      document.addEventListener("keydown", function (e) {
-        if (e.key !== "Escape") { return; }
-        Array.prototype.forEach.call(
-          document.querySelectorAll(".people-suggest-list"),
-          function (one) { one.style.display = "none"; });
+        if (!existing[one]) { host.appendChild(makeChip(one, "")); }
       });
     }
 
     if (hidden) { hidden.addEventListener("change", readHidden); }
-
-    sync();
+    readHidden();
   }
+
   /* ==========================================================================
      封面: 点击放大 + 多图槽位(左封面 / 右加号 / 全部可删)
      槽位规则:
@@ -660,71 +548,29 @@
      * 输入时仍给库内艺人候选(点选也行, 但不是必须)
      ========================================================================== */
   function setupCreditPeople() {
+    /* 词条行是**唯一**的人员编辑入口(用户要求 m11474)。
+       上方那排 chip 只是"下方词条合并后的效果" —— 每次词条变动都重建它,
+       所以上下永远同步, 而上方不能添加/删除任何人。
+    */
     var card = document.querySelector('[data-card="credits"]');
     if (!card) { return; }
     var host = card.querySelector('[data-people="artists"]');
     if (!host) { return; }
+    var artistsHidden = card.querySelector(
+      'input[type="hidden"][name="artists"]');
 
-    function chipNames() {
+    /* 词条里出现的人(按行序去重) */
+    function creditPeople() {
       var out = [];
       Array.prototype.forEach.call(
-        host.querySelectorAll(".person-chip"), function (chip) {
-          var name = chip.getAttribute("data-person");
-          if (name) { out.push(name); }
+        card.querySelectorAll(".credit-row"), function (row) {
+          Array.prototype.forEach.call(
+            row.querySelectorAll(".credit-person-chip"), function (one) {
+              var n = one.getAttribute("data-name");
+              if (n && out.indexOf(n) === -1) { out.push(n); }
+            });
         });
       return out;
-    }
-
-    function syncArtistsHidden() {
-      var hidden = card.querySelector('input[type="hidden"][name="artists"]');
-      if (!hidden) { return; }
-      var names = [];
-      Array.prototype.forEach.call(
-        host.querySelectorAll(".person-chip"), function (one) {
-          var n = one.getAttribute("data-person");
-          if (n && names.indexOf(n) === -1) { names.push(n); }
-        });
-      // 词条里的人也要算进 artists
-      Array.prototype.forEach.call(
-        card.querySelectorAll(".credit-person-chip"), function (one) {
-          var n = one.getAttribute("data-name");
-          if (n && names.indexOf(n) === -1) { names.push(n); }
-        });
-      hidden.value = names.join("\n");
-    }
-
-    /* 在上方生成「职责 · 人名」按钮 */
-    function addRoleChip(role, name) {
-      var roleText = String(role || "").trim();
-      var personText = String(name || "").trim();
-      if (!personText) { return; }
-      var existing = host.querySelectorAll(".person-chip");
-      for (var i = 0; i < existing.length; i++) {
-        var p = existing[i].getAttribute("data-person") || "";
-        var r = existing[i].getAttribute("data-role") || "";
-        if (p === personText && r === roleText) { return; }
-      }
-      var chip = document.createElement("span");
-      chip.className = "person-chip";
-      chip.setAttribute("data-person", personText);
-      chip.setAttribute("data-role", roleText);
-      chip.setAttribute("data-entity-id", "0");
-      var kind = document.createElement("span");
-      kind.className = "person-kind";
-      kind.textContent = roleText || "艺人";
-      var bold = document.createElement("b");
-      bold.textContent = personText;
-      var del = document.createElement("button");
-      del.type = "button";
-      del.className = "person-x";
-      del.setAttribute("data-person-del", "1");
-      del.setAttribute("aria-label", "移除 " + personText);
-      del.textContent = "×";
-      chip.appendChild(kind);
-      chip.appendChild(bold);
-      chip.appendChild(del);
-      host.appendChild(chip);
-      syncArtistsHidden();
     }
 
     /* 该行当前人员 */
@@ -743,33 +589,71 @@
       var list = valuesOf(row);
       var hidden = row.querySelector('input[name="credit_name"]');
       if (hidden) { hidden.value = list.join("、"); }
-      syncArtistsHidden();
+    }
+
+    /* 重建上方只读汇总: 与详情页同源算法
+         - 先放原 artists(职责空 -> 显示「艺人」)
+         - 再遍历词条补职责, 同一人只有一条
+         (服务端已按同规则渲染, 这里只做前端即时同步)
+    */
+    function rebuildSummary() {
+      var base = (host.getAttribute("data-artists") || "")
+        .split(/[\n、]+/)
+        .map(function (one) { return one.trim(); })
+        .filter(function (one) { return !!one; });
+      var order = base.slice();
+      var roles = {};
+      Array.prototype.forEach.call(
+        card.querySelectorAll(".credit-row"), function (row) {
+          var roleInput = row.querySelector('input[name="credit_role"]');
+          var role = roleInput ? roleInput.value.trim() : "";
+          valuesOf(row).forEach(function (name) {
+            if (order.indexOf(name) === -1) { order.push(name); }
+            if (role && !roles[name]) { roles[name] = role; }
+          });
+        });
+      host.textContent = "";
+      order.forEach(function (name) {
+        var chip = document.createElement("span");
+        chip.className = "person-chip is-static";
+        chip.setAttribute("data-person", name);
+        chip.setAttribute("data-role", roles[name] || "");
+        chip.setAttribute("data-entity-id", "0");
+        var kind = document.createElement("span");
+        kind.className = "person-kind";
+        kind.textContent = roles[name] || "艺人";
+        var bold = document.createElement("b");
+        bold.textContent = name;
+        chip.appendChild(kind);
+        chip.appendChild(bold);
+        host.appendChild(chip);
+      });
+      // artists 隐藏域 = 汇总里出现的**全部**人(词条 + 原有 artists)
+      if (artistsHidden) { artistsHidden.value = order.join("\n"); }
     }
 
     /* 行内加一个人 */
-    function addPersonToRow(row, name, roleText) {
+    function addPersonToRow(row, name) {
       var value = String(name || "").trim();
       if (!value) { return false; }
-      var have = valuesOf(row);
-      if (have.indexOf(value) === -1) {
-        var box = row.querySelector(".credit-people-chips");
-        if (box) {
-          var chip = document.createElement("span");
-          chip.className = "credit-person-chip";
-          chip.setAttribute("data-name", value);
-          chip.textContent = value;
-          var del = document.createElement("button");
-          del.type = "button";
-          del.className = "credit-person-x";
-          del.setAttribute("data-credit-person-del", "1");
-          del.setAttribute("aria-label", "移除 " + value);
-          del.textContent = "×";
-          chip.appendChild(del);
-          box.appendChild(chip);
-        }
+      if (valuesOf(row).indexOf(value) !== -1) { writeValues(row); return true; }
+      var box = row.querySelector(".credit-people-chips");
+      if (box) {
+        var chip = document.createElement("span");
+        chip.className = "credit-person-chip";
+        chip.setAttribute("data-name", value);
+        chip.textContent = value;
+        var del = document.createElement("button");
+        del.type = "button";
+        del.className = "credit-person-x";
+        del.setAttribute("data-credit-person-del", "1");
+        del.setAttribute("aria-label", "移除 " + value);
+        del.textContent = "×";
+        chip.appendChild(del);
+        box.appendChild(chip);
       }
       writeValues(row);
-      addRoleChip(roleText, value);
+      rebuildSummary();
       return true;
     }
 
@@ -778,45 +662,19 @@
       if (e.key !== "Enter" && e.keyCode !== 13) { return; }
       var input = e.target;
       if (!input || !input.classList) { return; }
-      e.preventDefault();
-
-      // ① 人员输入框: 加入该行人员 + 生成上方按钮
-      if (input.classList.contains("credit-person-input")) {
-        var row = input.closest(".credit-row");
-        if (!row) { return; }
-        var raw = String(input.value || "").trim();
-        if (!raw) { return; }
-        var roleInput = row.querySelector('input[name="credit_role"]');
-        var roleText = roleInput ? roleInput.value.trim() : "";
-        // 支持一次敲多个(用、或,分隔)
-        raw.split(/[、,，]/).forEach(function (one) {
-          var name = one.trim();
-          if (name) { addPersonToRow(row, name, roleText); }
-        });
-        input.value = "";
-        return;
-      }
-
-      // ② 职责框: 把该行已有人员按这个职责再生成一遍按钮
-      if (input.name === "credit_role") {
-        var creditRow = input.closest(".credit-row");
-        if (!creditRow) { return; }
-        var people = valuesOf(creditRow);
-        if (!people.length) {
-          var hint = creditRow.querySelector(".credit-people-field .field-hint");
-          if (hint) {
-            hint.textContent = "先在上面输入人员";
-            hint.classList.add("is-warn");
-            window.setTimeout(function () {
-              hint.textContent = "输入后回车加入";
-              hint.classList.remove("is-warn");
-            }, 1600);
-          }
-          return;
-        }
-        var r = input.value.trim();
-        people.forEach(function (one) { addRoleChip(r, one); });
-      }
+      if (!input.classList.contains("credit-person-input")) { return; }
+      e.preventDefault();                 // 不提交表单
+      var row = input.closest(".credit-row");
+      if (!row) { return; }
+      var raw = String(input.value || "").trim();
+      if (!raw) { return; }
+      // 支持一次敲多个(用、或,分隔)
+      raw.split(/[、,，]/).forEach(function (one) {
+        var name = one.trim();
+        if (name) { addPersonToRow(row, name); }
+      });
+      input.value = "";
+      closeSuggest(row);
     });
 
     /* ---- 删除行内人员 ---- */
@@ -829,33 +687,30 @@
       var row = chip ? chip.closest(".credit-row") : null;
       if (chip && chip.parentNode) { chip.parentNode.removeChild(chip); }
       if (row) { writeValues(row); }
+      rebuildSummary();
     });
 
-    /* ---- 上方按钮删除时, 同步清理词条里同名的人 ---- */
-    host.addEventListener("click", function (e) {
-      var del = e.target && e.target.closest
-        ? e.target.closest("[data-person-del]") : null;
-      if (!del) { return; }
-      window.setTimeout(function () {
-        var alive = chipNames();
-        Array.prototype.forEach.call(
-          card.querySelectorAll(".credit-row"), function (row) {
-            var changed = false;
-            Array.prototype.forEach.call(
-              row.querySelectorAll(".credit-person-chip"), function (one) {
-                if (alive.indexOf(one.getAttribute("data-name")) === -1) {
-                  one.remove();
-                  changed = true;
-                }
-              });
-            if (changed) { writeValues(row); }
-          });
-      }, 0);
+    /* ---- 职责框改动: 上方 chip 的职责跟着变 ---- */
+    card.addEventListener("input", function (e) {
+      var t = e.target;
+      if (!t || t.name !== "credit_role") { return; }
+      rebuildSummary();
+    });
+
+    /* ---- 删除/新增词条行: 上方跟着变 ---- */
+    card.addEventListener("click", function (e) {
+      var t = e.target;
+      if (!t || !t.closest) { return; }
+      if (t.closest("[data-pair-del]") || t.closest("[data-pair-add]")) {
+        // 交给页面的行增删逻辑处理完再刷新
+        window.setTimeout(rebuildSummary, 0);
+        window.setTimeout(rebuildSummary, 60);
+      }
     });
 
     /* ---- 人员输入框: 输入时给艺人候选(点选或回车加入) ---- */
-    function buildSuggestFor(input, row) {
-      var wrap = input.closest(".credit-people-box");
+    function suggestBoxOf(row) {
+      var wrap = row.querySelector(".credit-people-box");
       if (!wrap) { return null; }
       var box = wrap.querySelector(".credit-suggest");
       if (!box) {
@@ -867,8 +722,13 @@
       return box;
     }
 
+    function closeSuggest(row) {
+      var box = row ? row.querySelector(".credit-suggest") : null;
+      if (box) { box.style.display = "none"; box.textContent = ""; }
+    }
+
     function renderSuggest(input, row) {
-      var box = buildSuggestFor(input, row);
+      var box = suggestBoxOf(row);
       if (!box) { return; }
       var needle = String(input.value || "").trim().toLowerCase();
       if (!needle) {
@@ -889,21 +749,17 @@
             };
           });
       }
-      var pool = window.__creditArtistPool;
       var hits = [];
+      var pool = window.__creditArtistPool;
       pool.forEach(function (one) {
         var name = one.name || "";
-        var eid = one.eid || "";
         var lower = name.toLowerCase();
-        if (have.indexOf(lower) !== -1) { return; }
-        if (lower.indexOf(needle) === -1 && eid !== needle) { return; }
-        hits.push({ name: name, eid: eid });
+        if (!name || have.indexOf(lower) !== -1) { return; }
+        if (lower.indexOf(needle) === -1 && (one.eid || "") !== needle) { return; }
+        hits.push(one);
       });
       box.textContent = "";
-      if (!hits.length) {
-        box.style.display = "none";
-        return;
-      }
+      if (!hits.length) { box.style.display = "none"; return; }
       hits.slice(0, 20).forEach(function (item) {
         var btn = document.createElement("button");
         btn.type = "button";
@@ -911,83 +767,43 @@
         btn.setAttribute("data-name", item.name);
         btn.setAttribute("data-entity-id", item.eid);
         btn.textContent = item.name;
-        var em = document.createElement("em");
-        em.textContent = "#" + item.eid;
-        btn.appendChild(em);
         box.appendChild(btn);
       });
       box.style.display = "block";
     }
 
-    function hideAllSuggest() {
-      Array.prototype.forEach.call(
-        card.querySelectorAll(".credit-suggest"), function (box) {
-          box.style.display = "none";
-        });
-    }
-
-    // 输入时筛候选
     card.addEventListener("input", function (e) {
-      var input = e.target;
-      if (!input || !input.classList) { return; }
-      if (!input.classList.contains("credit-person-input")) { return; }
-      var row = input.closest(".credit-row");
-      if (!row) { return; }
-      renderSuggest(input, row);
+      var t = e.target;
+      if (!t || !t.classList || !t.classList.contains("credit-person-input")) {
+        return;
+      }
+      var row = t.closest(".credit-row");
+      if (row) { renderSuggest(t, row); }
     });
 
-    // 候选点选(mousedown: 早于失焦)
     card.addEventListener("mousedown", function (e) {
       var btn = e.target && e.target.closest
         ? e.target.closest(".credit-suggest-item") : null;
       if (!btn) { return; }
       e.preventDefault();
-      e.stopPropagation();
-      var host = btn.closest(".credit-people-box");
-      var input = host ? host.querySelector(".credit-person-input") : null;
-      var row = input ? input.closest(".credit-row") : null;
+      var row = btn.closest(".credit-row");
       if (!row) { return; }
-      var roleInput = row.querySelector('input[name="credit_role"]');
-      var roleText = roleInput ? roleInput.value.trim() : "";
-      addPersonToRow(row, btn.getAttribute("data-name"), roleText);
+      addPersonToRow(row, btn.getAttribute("data-name"));
+      var input = row.querySelector(".credit-person-input");
       if (input) { input.value = ""; }
-      hideAllSuggest();
+      closeSuggest(row);
     });
 
-    // 点别处 / Esc 关候选
-    if (!document.__creditSuggestBound) {
-      document.__creditSuggestBound = true;
-      document.addEventListener("mousedown", function (e) {
-        var t = e.target;
-        if (!t || !t.closest) { return; }
-        if (t.closest(".credit-people-box")) { return; }
-        if (t.closest(".credit-suggest")) { return; }
-        Array.prototype.forEach.call(
-          document.querySelectorAll(".credit-suggest"), function (box) {
-            box.style.display = "none";
-          });
-      });
-      document.addEventListener("keydown", function (e) {
-        if (e.key !== "Escape") { return; }
-        Array.prototype.forEach.call(
-          document.querySelectorAll(".credit-suggest"), function (box) {
-            box.style.display = "none";
-          });
-      });
-    }
-
-    // 回车后收起候选
-    card.addEventListener("keydown", function (e) {
-      if (e.key === "Enter" || e.keyCode === 13) {
-        hideAllSuggest();
+    card.addEventListener("focusout", function (e) {
+      var t = e.target;
+      if (!t || !t.classList || !t.classList.contains("credit-person-input")) {
+        return;
       }
+      var row = t.closest(".credit-row");
+      window.setTimeout(function () { closeSuggest(row); }, 120);
     });
 
-    // 初始化: 同步一次隐藏字段
-    Array.prototype.forEach.call(
-      card.querySelectorAll(".credit-row"), function (row) {
-        writeValues(row);
-      });
+    rebuildSummary();
   }
 
   /* ==========================================================================
