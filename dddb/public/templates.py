@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 from . import i18n
+from . import linknames as link_names
 from .markdown import markdown_to_html
 
 import json
@@ -67,12 +68,19 @@ ROLE_LABELS: dict[str, str] = {
 }
 
 #: credits 分组的显示顺序 —— 让"谁做了这张碟"按主流层级排, 而不是随机序。
+#: 用户 m13077 指定: 制作(produce) 最前, 其次 艺人 / 作曲 / 编曲 / 演唱 / 作词,
+#: 其余按"参与深度"往后排。编辑页 chip 与详情页分组共用这一个序列。
 ROLE_ORDER: tuple[str, ...] = (
-    "circle", "label", "artist", "performer",
-    "compose", "arrange", "lyric", "vocal", "voice",
+    # circle / label 是详情页的**分组标题**(社团 / 厂牌), 不是个人职责 ——
+    # 编辑页 chip 会把 circle 过滤掉, 所以放最前不影响"制作排第一"。
+    "circle", "label",
+    "produce", "artist",
+    "compose", "arrange", "vocal", "lyric",
+    "performer", "voice",
+    "mix", "mastering",
     "illustrator", "jacket", "artwork", "design",
-    "mix", "mastering", "guitar", "bass", "drums", "piano", "violin",
-    "produce", "other",
+    "guitar", "bass", "drums", "piano", "violin",
+    "other",
 )
 
 #: 展会类型显示名
@@ -545,11 +553,11 @@ def layout(
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
 <title>{esc(title)} · {esc(ctx.site_name)}</title>
-<link rel="stylesheet" href="/static/public.css?v=74">
+<link rel="stylesheet" href="/static/public.css?v=76">
 <!-- ?v=2: 图标换过, 但静态资源被 CF/浏览器缓存 1 天, 加版本号强制刷新 -->
 <link rel="icon" href="/static/favicon.svg?v=2" type="image/svg+xml">
 <!-- 唯一的脚本: 同源外链, 只做渐进增强(CSP 只给 script-src 'self') -->
-<script src="/static/public.js?v=64" defer></script>
+<script src="/static/public.js?v=66" defer></script>
 <script src="/static/cover-crop.js?v=6" defer></script>
 <script src="/static/infobox.js?v=8" defer></script>
 </head>
@@ -1655,7 +1663,7 @@ def album_detail_page(
         #   所以只渲染普通外链按钮; embed 条目靠 embed-list 呈现。
         links_html = "".join(
             '<a class="link-pill" href="{}" data-external="1"'
-            ' rel="nofollow noopener">{}</a>'.format(
+            ' target="_blank" rel="nofollow noopener noreferrer">{}</a>'.format(
                 # href 里的序号来自 data 层的原始 position, 不受过滤影响
                 esc(safe_url(link.get("href"))),
                 esc(_link_label(link, int(link.get("position") or index))),
@@ -2004,7 +2012,7 @@ def event_series_page(
     _links = series.get("links") or {}
     link_html = "".join(
         '<a class="link-pill" href="{}" data-external="1"'
-        ' rel="nofollow noopener">{}</a>'.format(
+        ' target="_blank" rel="nofollow noopener noreferrer">{}</a>'.format(
             esc(safe_url(url)), esc(label or url))
         for label, url in _links.items()
         if safe_url(url)
@@ -2080,7 +2088,7 @@ def event_page(
     _links = links or {}
     _link_html = "".join(
         '<a class="link-pill" href="{}" data-external="1"'
-        ' rel="nofollow noopener">{}</a>'.format(
+        ' target="_blank" rel="nofollow noopener noreferrer">{}</a>'.format(
             esc(safe_url(url)), esc(label or url))
         for label, url in _links.items()
         if safe_url(url)
@@ -3965,14 +3973,46 @@ def public_profile_page(
 
 
 def _short(value: Any, limit: int = 80) -> str:
+    """把历史对比的值压成一行可读文本.
+
+    历史字段里有四种形状, 直接 ``str()`` 会显示成一大坨:
+    ``urls`` 是 ``{名字: 地址}``、``credits`` 是 ``[{role,name}]``、
+    ``tracks`` 是 ``[{index,title}]``、``photos`` 是 ``[{url,note}]``。
+    """
     if value is None:
         return "(空)"
-    if isinstance(value, (list, tuple)):
-        text = "、".join(str(item) for item in value)
+    if isinstance(value, Mapping):
+        pairs = [f"{k}: {v}" for k, v in value.items() if str(v or "").strip()]
+        text = "、".join(pairs)
+    elif isinstance(value, (list, tuple)):
+        parts: list[str] = []
+        for item in value:
+            if isinstance(item, Mapping):
+                parts.append(_item_text(item))
+            else:
+                parts.append(str(item))
+        text = "、".join(one for one in parts if one)
     else:
         text = str(value)
     text = text.strip() or "(空)"
     return text[:limit] + ("…" if len(text) > limit else "")
+
+
+def _item_text(item: Mapping[str, Any]) -> str:
+    """单条记录的简短文字: 曲目取「序号. 曲名」, 词条取「职责: 人名」, 外链取「名字: 地址」."""
+    title = item.get("title")
+    if title:
+        index = item.get("index")
+        return f"{index}. {title}" if index else str(title)
+    name = item.get("name")
+    if name:
+        role = item.get("role")
+        return f"{role}: {name}" if role else str(name)
+    url = item.get("url")
+    if url:
+        return str(url)
+    note = item.get("note")
+    return str(note) if note else ""
 
 
 #: 同一个人在这段时间内(秒)的连续修改会被折叠成一条记录
@@ -4960,12 +5000,21 @@ def edit_album_page(
     )
     # 同上: 外链也不补空行, 全空时给 1 行占位
     url_rows = list(values.get("urls") or []) or [{}]
+    # 链接名给下拉候选(标准识别名), 用户仍可自己输入 —— 见 linknames.py
+    _link_choices = "".join(
+        '<option value="{}"></option>'.format(esc(_one))
+        for _one in link_names.name_choices())
+    _link_datalist = ('<datalist id="dl-url_key">' + _link_choices
+                      + "</datalist>")
     urls_html = "".join(
         '<div class="pair-row" data-pair-row="url">'
         '<label class="field auth-field"><span>链接名</span>'
-        '<input type="text" name="url_key" value="{}" placeholder="自定义标签"></label>'
+        '<input type="text" name="url_key" value="{}"'
+        ' list="dl-url_key" autocomplete="off"'
+        ' placeholder="填网址自动识别"></label>'
         '<label class="field auth-field"><span>网址</span>'
-        '<input type="text" name="url_value" value="{}" placeholder="https://..."></label>'
+        '<input type="text" name="url_value" value="{}"'
+        ' placeholder="https://..."></label>'
         '<button type="button" class="pair-del" data-pair-del="url"'
         ' title="删除这一条" aria-label="删除这一条">✕</button>'
         "</div>".format(esc(row.get("key") or ""), esc(row.get("url") or ""))
@@ -5154,8 +5203,12 @@ def edit_album_page(
         _cover_inner = (
             '<div class="edit-cover-row">'
             '<div class="edit-cover-thumb">'
-            '<div class="cover cover-fallback edit-cover-img">'
-            '<span>新建</span>'
+            # 没有封面时这里是**加号上传按钮**(用户 m13494: 只显示"新建"两个字
+            # 完全不像能点的东西)。整块可点, 由 setupCoverPick 转发到 file input。
+            '<div class="cover cover-fallback edit-cover-img cover-add-thumb"'
+            ' data-cover-pick="1" role="button" tabindex="0"'
+            ' title="添加封面">'
+            '<span class="cover-plus">＋</span>'
             '<img class="cover-preview-img" alt="" hidden>'
             '</div></div>'
             '<div class="cover-form">'
@@ -5174,7 +5227,21 @@ def edit_album_page(
             ' data-cover-pick="1">上传封面</button>'
             '<p class="field-hint">PNG / JPEG / WebP，≤2MB；'
             '保存后随专辑一起创建</p>'
-            '</div></div>'
+            '</div>'
+            # **其他照片**: 新建时还没有 key, 不能走 /album/<key>/photo,
+            # 所以前端先把每张图缩到 900px 存成 data URL, 塞进隐藏域随表单提交
+            # (服务端 _save_new_photos 建完专辑后逐张落盘)。
+            '<div class="cover-slots cover-slots-local" data-photo-local="1">'
+            '<button type="button" class="cover-slot cover-slot-add"'
+            ' data-photo-add="1" title="添加其他照片">＋</button>'
+            '</div>'
+            '<input type="file" id="photo-input" class="cover-file"'
+            ' accept="image/png,image/jpeg,image/webp" multiple>'
+            '<input type="hidden" name="photos_data" id="photos-data">'
+            '<div class="photo-list" data-photo-list="1"></div>'
+            '</div>'
+            '<p class="field-hint">「＋」可以再加若干张其他照片（不含封面），'
+            '每张最多 2MB，最多 12 张</p>'
         )
     else:
         _cover_inner = (
@@ -5419,7 +5486,7 @@ def edit_album_page(
     )
     _cards["links"] = _card(
         "links",
-        f'<div class="rows">{urls_html}</div>{urls_add_html}',
+        f'<div class="rows">{urls_html}</div>{_link_datalist}{urls_add_html}',
         i18n.translate("section.links", ctx.lang),
         "edit-card-links",
     )
@@ -5432,6 +5499,8 @@ def edit_album_page(
     if creating:
         _delete_btn = ""
         _delete_form = ""
+        _merge_btn = ""
+        _merge_form = ""
     else:
         _delete_btn = (
             '<!-- 删除按钮: 表单在**主表单之外**(HTML 不允许嵌套 form,'
@@ -5449,10 +5518,32 @@ def edit_album_page(
             '<input type="hidden" name="csrf_token" value="{}">'
             '</form>'
         ).format(esc(quote_segment(key)), esc(ctx.csrf_token))
+        # 合并专辑(用户 m13494): 把**这张**并进另一张, 保留目标、删掉本条目。
+        # 与删除一样, 表单必须在主表单之外(HTML 不允许嵌套 form)。
+        _merge_btn = (
+            '<!-- 合并: 表单在主表单之外, 用 form 属性关联(理由同删除按钮) -->'
+            '<button type="submit" class="btn-ghost"'
+            ' form="merge-album-form">合并专辑</button>'
+        )
+        _merge_form = (
+            '<form id="merge-album-form" method="post"'
+            ' action="/album/{}/merge"'
+            ' data-confirm="把当前这张专辑合并到目标专辑？'
+            '合并后当前这张会被删除，且不可恢复。">'
+            '<input type="hidden" name="csrf_token" value="{}">'
+            '<label class="field-label" for="merge-target">合并到</label>'
+            '<input class="input" type="text" id="merge-target" name="target"'
+            ' placeholder="目标专辑的编号或 /album/... 地址">'
+            '<p class="field-hint">填目标专辑的编号（如 circle|title|2026），'
+            '也可以直接粘它的 /album/… 地址。当前这张的曲目 / 制作人员 / '
+            '外链 / 附图会并进目标。</p>'
+            '</form>'
+        ).format(esc(quote_segment(key)), esc(ctx.csrf_token))
 
     if creating:
         _intro = ('<p class="section-note">新建专辑: 填好后点保存, '
-                  '会创建一张新专辑并进入它的编辑页。</p>')
+                  '会创建这张专辑并直接打开它的详情页。'
+                  '万一保存失败, 你填的内容会原样留在下面。</p>')
     else:
         _intro = ('<p class="section-note">正在编辑: '
                   '<a href="/album/{0}">{1}</a>'
@@ -5467,6 +5558,7 @@ def edit_album_page(
     <div class="edit-draft-bar" data-draft-bar="1">
   <span class="draft-status">编辑内容会自动存草稿</span>
   <button type="button" class="btn-ghost btn-xs" data-draft-save="1">保存草稿</button>
+  <button type="button" class="btn-ghost btn-xs" data-draft-history="1">草稿历史</button>
   <button type="button" class="btn-ghost btn-xs" data-draft-clear="1">清除草稿</button>
 </div>
 <div class="edit-cards" id="edit-cards">
@@ -5485,11 +5577,12 @@ def edit_album_page(
     <div class="field-actions edit-actions">
       <button type="submit">{i18n.translate("btn.save", ctx.lang)}</button>
       <a class="btn-ghost" href="{esc(_cancel_href)}">{i18n.translate("btn.cancel", ctx.lang)}</a>
+      {_merge_btn}
       {_delete_btn}
     </div>
     <div class="field-actions edit-actions" hidden>
     </div>
-    </form>{_delete_form}{_infobox_html}"""
+    </form>{_merge_form}{_delete_form}{_infobox_html}"""
     if creating:
         _crumbs = [("浏览", "/albums"), ("编辑", "/edit"), ("新建专辑", "")]
     else:
@@ -5640,7 +5733,7 @@ def _profile_card(
             '<div class="profile-links">'
             + "".join(
                 f'<a class="link-pill" href="{esc(safe_url(link.get("href")))}"'
-                ' rel="nofollow noopener">'
+                ' target="_blank" rel="nofollow noopener noreferrer">'
                 f'{esc(link.get("text") or "链接")}</a>'
                 for link in links if safe_url(link.get("href")))
             + "</div>"
