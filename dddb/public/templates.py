@@ -549,7 +549,7 @@ def layout(
 <!-- ?v=2: 图标换过, 但静态资源被 CF/浏览器缓存 1 天, 加版本号强制刷新 -->
 <link rel="icon" href="/static/favicon.svg?v=2" type="image/svg+xml">
 <!-- 唯一的脚本: 同源外链, 只做渐进增强(CSP 只给 script-src 'self') -->
-<script src="/static/public.js?v=60" defer></script>
+<script src="/static/public.js?v=61" defer></script>
 <script src="/static/cover-crop.js?v=6" defer></script>
 <script src="/static/infobox.js?v=8" defer></script>
 </head>
@@ -5144,6 +5144,11 @@ def edit_album_page(
             # infobox 里带了图片地址时, 前端把地址放这儿 —— 新建时还没有 key,
             # 没法直接调 /cover-url, 由服务端建完专辑后兜底抓一次。
             '<input type="hidden" name="cover_url_hint" id="cover-url-hint">'
+            # 草稿要能记住"选过哪张图"(用户 m12280): file input 的值既存不进
+            # localStorage, 也恢复不回来。所以选完图额外把 data URL 放这儿 ——
+            # 带 name 是有意的, 它会随表单一起提交, 服务端在没有 cover 文件
+            # 时用它兜底落盘。于是刷过页面之后封面不但看得见, 也还提交得上。
+            '<input type="hidden" name="cover_data" id="cover-data">'
             '<p class="cover-picked" id="cover-picked"></p>'
             '<button type="button" class="btn-ghost btn-xs cover-upload-btn"'
             ' data-cover-pick="1">上传封面</button>'
