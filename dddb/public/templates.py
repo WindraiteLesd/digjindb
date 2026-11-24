@@ -549,7 +549,7 @@ def layout(
 <!-- ?v=2: 图标换过, 但静态资源被 CF/浏览器缓存 1 天, 加版本号强制刷新 -->
 <link rel="icon" href="/static/favicon.svg?v=2" type="image/svg+xml">
 <!-- 唯一的脚本: 同源外链, 只做渐进增强(CSP 只给 script-src 'self') -->
-<script src="/static/public.js?v=56" defer></script>
+<script src="/static/public.js?v=57" defer></script>
 <script src="/static/cover-crop.js?v=6" defer></script>
 <script src="/static/infobox.js?v=7" defer></script>
 </head>
@@ -5244,7 +5244,11 @@ def edit_album_page(
                 _all_people.append(_one)
 
     def _people_chip(name: str, role: str = "") -> str:
-        """一个人员按钮. 有职责时显示「职责 · 人名」(与详情页一致)."""
+        """**只读**人员按钮: 显示「职责 · 人名」(与详情页一致).
+
+        用户要求(m11474): 上方只显示下方词条添加后的**效果**, 不是输入区。
+        所以这里不带 × 删除按钮, 也不参与添加 —— 编辑入口只有下方词条行。
+        """
         _eid = 0
         try:
             _eid = int((bind_ids.get("artist") or {}).get(name) or 0)
@@ -5253,12 +5257,10 @@ def edit_album_page(
         _role_text = str(role or "").strip()
         _kind = _role_text if _role_text else "艺人"
         return (
-            '<span class="person-chip" data-person="{name}"'
+            '<span class="person-chip is-static" data-person="{name}"'
             ' data-role="{role}" data-entity-id="{eid}">'
             '<span class="person-kind">{kind}</span>'
-            '<b>{name}</b>'
-            '<button type="button" class="person-x" data-person-del="1"'
-            ' aria-label="移除 {name}">×</button></span>'.format(
+            '<b>{name}</b></span>'.format(
                 name=esc(name), eid=_eid, role=esc(_role_text),
                 kind=esc(_kind)))
 
@@ -5337,18 +5339,25 @@ def edit_album_page(
             eid=esc(item.get("id") or ""))
         for item in (bind_options.get("artist") or ())
     )
+    # 上方: **只读汇总**(下方词条合并出来的效果), 没有任何添加入口。
+    # 用户要求(m11474): 「上面的部分应该只显示下方词条添加后的效果而不是
+    # 作为具有添加功能的一部分」。所以这里既没有搜索框, 也没有 × 删除。
+    #   汇总规则与详情页同源: 艺人打头(职责空 -> 显示「艺人」), 词条补职责。
+    _base_people = "\n".join(_all_people)
     _cards["credits"] = _card(
         "credits",
-        '<div class="people-chips" data-people="artists">'
+        '<p class="field-hint summary-hint">下方词条合并后的结果（只读）</p>'
+        # data-people 必须**最后**一个属性: 多个测试用
+        # 'data-people="artists">' 这段字面量来截取 chip 区。
+        + '<div class="people-chips is-summary" data-artists="{}"'
+          ' data-people="artists">'.format(esc(_base_people))
         + _people_chips
         + "</div>"
-        + '<div class="people-picker">'
-        + '<input type="text" class="people-search" '
-          'placeholder="搜艺人名 / #编号，点选加入" autocomplete="off">'
-        + '<div class="people-suggest-list">' + _artist_options + "</div>"
-        + "</div>"
         + '<input type="hidden" name="artists" value="{}">'.format(
-            esc("\n".join(_all_people)))
+            esc(_base_people))
+        # 艺人候选池: 只给下方词条行的输入框做联想, 界面上看不见。
+        + '<div class="people-suggest-list" hidden>'
+        + _artist_options + "</div>"
         + '<h3 class="edit-sub-title">词条</h3>'
         + '<div class="rows">' + _credit_rows + "</div>"
         + credits_add_html,
