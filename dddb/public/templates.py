@@ -549,7 +549,7 @@ def layout(
 <!-- ?v=2: 图标换过, 但静态资源被 CF/浏览器缓存 1 天, 加版本号强制刷新 -->
 <link rel="icon" href="/static/favicon.svg?v=2" type="image/svg+xml">
 <!-- 唯一的脚本: 同源外链, 只做渐进增强(CSP 只给 script-src 'self') -->
-<script src="/static/public.js?v=59" defer></script>
+<script src="/static/public.js?v=60" defer></script>
 <script src="/static/cover-crop.js?v=6" defer></script>
 <script src="/static/infobox.js?v=8" defer></script>
 </head>
@@ -5413,6 +5413,7 @@ def edit_album_page(
     <input type="hidden" name="csrf_token" value="{esc(ctx.csrf_token)}">{_key_field}
     <div class="edit-draft-bar" data-draft-bar="1">
   <span class="draft-status">编辑内容会自动存草稿</span>
+  <button type="button" class="btn-ghost btn-xs" data-draft-save="1">保存草稿</button>
   <button type="button" class="btn-ghost btn-xs" data-draft-clear="1">清除草稿</button>
 </div>
 <div class="edit-cards" id="edit-cards">
