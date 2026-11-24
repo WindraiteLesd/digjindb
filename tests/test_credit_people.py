@@ -132,6 +132,23 @@ class TestCreditPeopleJs(unittest.TestCase):
         # 不再往上方"生成按钮" —— 上方是只读的
         self.assertNotIn("addRoleChip", block)
 
+    def test_delete_drops_from_base(self) -> None:
+        """删掉行内人员时, 基础名单(data-artists)也要跟着删.
+
+        infobox 填入会把 artists 写进 data-artists, rebuildSummary 每次都从
+        它起头 —— 只删 chip 不删基础名单, 那个人下次重建就又冒出来了
+        (用户 m12610: 删除后仍然出现在预览中)。
+        """
+        start = self.js.find("function setupCreditPeople(")
+        end = self.js.find("\n  /*", start + 10)
+        block = self.js[start:end if end > 0 else start + 9000]
+        self.assertIn("function dropFromBase(", block)
+        idx = block.find("[data-credit-person-del]")
+        self.assertGreater(idx, 0)
+        after = block[idx:idx + 900]
+        self.assertIn("dropFromBase(gone)", after)
+        self.assertIn("rebuildSummary()", after)
+
 
 class TestSummaryIsReadOnly(unittest.TestCase):
     """上方那排 chip 只是"下方词条合并后的效果", 不再有添加/删除入口。
