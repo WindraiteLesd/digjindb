@@ -29,6 +29,7 @@ from .embed import extract_embed as _extract_embed
 from . import i18n as I18N
 
 import argparse
+import base64
 import ipaddress
 import logging
 import math
@@ -3486,6 +3487,38 @@ class PublicSite:
             pass
         return True, str(target)
 
+    def _store_cover_from_data(self, key: str,
+                               values: Mapping[str, Any]) -> bool:
+        """把草稿带回来的 ``cover_data`` (data URL) 存成封面; 尽力而为.
+
+        用户在新专辑页选过封面图, 之后刷新过页面 —— ``<input type="file">``
+        的值恢复不回来, 只有草稿里那份 base64 还在。前端把它放在
+        ``name="cover_data"`` 的隐藏域里随表单提交, 这里解出来落盘。
+        """
+        raw = str(text_field(values, "cover_data") or "").strip()
+        if not raw or not raw.startswith("data:") or "," not in raw:
+            return False
+        header, _, payload = raw.partition(",")
+        mime = header[5:].split(";")[0].strip().lower()
+        if mime not in _URL_COVER_TYPES:
+            logger.warning("草稿封面格式不支持(%s): %s", key, mime)
+            return False
+        try:
+            blob = base64.b64decode(payload, validate=False)
+        except (ValueError, TypeError):
+            return False
+        if not blob or len(blob) > MAX_URL_COVER_BYTES:
+            return False
+        # 用真实字节头复核一遍 —— 前半段 mime 只是浏览器自报
+        sniffed = sniff_image_type(blob)
+        if sniffed not in _URL_COVER_TYPES:
+            return False
+        ok, note = self._store_cover_bytes(key, blob, sniffed,
+                                          _URL_COVER_TYPES[sniffed])
+        if not ok:
+            logger.warning("草稿封面落盘失败(%s): %s", key, note)
+        return ok
+
     def _store_cover_from_url(self, key: str, url: str) -> bool:
         """抓 ``url`` 存成封面; **尽力而为**, 失败只记日志返回 False.
 
@@ -5149,12 +5182,16 @@ class PublicSite:
                                                 if state.session else ""),
                                    summary="新建专辑")
                 # 封面: 新建表单里的 <input type="file" name="cover">
-                # 没传文件但 infobox 里带了图片地址时, 服务端抓一次兜底
-                # (新建页还没有 key, 前端没法调 /cover-url)
+                # 没传文件时按两级兜底 ——
+                #   ① cover_data: 草稿里存着的 data URL(用户选过图但刷新过页面,
+                #      file input 的值恢复不回来, 只有这份 base64 还在);
+                #   ② cover_url_hint: infobox 带的图片地址, 服务端抓一次
+                #      (新建页还没有 key, 前端没法调 /cover-url)
                 if not self._save_album_cover_file(key, values):
-                    _hint = str(text_field(values, "cover_url_hint") or "").strip()
-                    if _hint:
-                        self._store_cover_from_url(key, _hint)
+                    if not self._store_cover_from_data(key, values):
+                        _hint = str(text_field(values, "cover_url_hint") or "").strip()
+                        if _hint:
+                            self._store_cover_from_url(key, _hint)
                 created_key = created_name = key
                 target = "/album/" + T.quote_segment(key) + "/edit"
             elif kind == "circle":
