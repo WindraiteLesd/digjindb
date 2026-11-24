@@ -486,27 +486,42 @@
       return data;
     }
 
+    var lastSaved = "";
+
     function save() {
+      var payload;
       try {
-        window.localStorage.setItem(KEY, JSON.stringify({
-          action: action,
-          at: Date.now(),
-          values: collect()
-        }));
+        payload = JSON.stringify({ action: action, at: Date.now(), values: collect() });
+      } catch (err) { return; }
+      /* 值没变就不写、也不动状态条 —— 状态条在表单里, 改它的文字会再次
+         触发 MutationObserver, 不判等就会变成每 1.2 秒自我触发的死循环。 */
+      var stamp = payload.slice(0, payload.indexOf(',"at":'));
+      if (stamp === lastSaved) { return; }
+      lastSaved = stamp;
+      try {
+        window.localStorage.setItem(KEY, payload);
         if (bar) {
           bar.textContent = "草稿已自动保存 " + new Date().toLocaleTimeString();
         }
       } catch (err) { /* 隐私模式 / 超限: 静默 */ }
     }
 
-    form.addEventListener("input", function () {
+    function scheduleSave() {
       if (timer) { window.clearTimeout(timer); }
       timer = window.setTimeout(save, 1200);
-    });
-    form.addEventListener("change", function () {
-      if (timer) { window.clearTimeout(timer); }
-      timer = window.setTimeout(save, 1200);
-    });
+    }
+
+    form.addEventListener("input", scheduleSave);
+    form.addEventListener("change", scheduleSave);
+    /* 行增删 / chip 增删都不派发 input|change(它们直接改 DOM 与隐藏域),
+       只监听这两个事件的话「点了＋添加词条 / ＋添加歌曲」之后的内容根本没进草稿
+       (用户 m11689: 草稿保存的字段并不全)。所以再加 click 与 DOM 变更兜住。 */
+    form.addEventListener("click", scheduleSave);
+    if (typeof window.MutationObserver === "function") {
+      new window.MutationObserver(scheduleSave).observe(form, {
+        childList: true, subtree: true
+      });
+    }
 
     // 有草稿就提示恢复(不自动套用)
     try {
@@ -524,18 +539,128 @@
       restore.addEventListener("click", function (e) {
         e.preventDefault();
         var values = saved.values || {};
+        var listOf = function (name) {
+          var raw = values[name];
+          if (raw === undefined || raw === null) { return []; }
+          return Array.isArray(raw) ? raw : [raw];
+        };
+        /* 恢复草稿必须先把**重复行**补齐/裁掉, 否则草稿里第 3 条词条
+           在页面上只有 2 行时无处可放(用户 m11689: 字段不全)。 */
+        var pairRows = function (kind) {
+          return Array.prototype.slice.call(
+            form.querySelectorAll('[data-pair-row="' + kind + '"]'));
+        };
+        var fitPairRows = function (kind, need) {
+          if (!need) { return; }
+          var rows = pairRows(kind);
+          var guard = 0;
+          while (rows.length < need && guard < 80) {
+            var add = form.querySelector('[data-pair-add="' + kind + '"]');
+            if (!add) { break; }
+            add.click();
+            var after = pairRows(kind);
+            if (after.length <= rows.length) { break; }
+            rows = after;
+            guard += 1;
+          }
+          while (rows.length > need) {
+            var last = rows[rows.length - 1];
+            if (!last || !last.parentNode) { break; }
+            last.parentNode.removeChild(last);
+            rows = pairRows(kind);
+          }
+        };
+        var discBlocks = function () {
+          return Array.prototype.slice.call(
+            form.querySelectorAll(".disc-block"));
+        };
+        var fitDiscs = function (need) {
+          var blocks = discBlocks();
+          var guard = 0;
+          while (blocks.length < need && guard < 20) {
+            var addDisc = form.querySelector('[data-disc-add="1"]');
+            if (!addDisc) { break; }
+            addDisc.click();
+            var after = discBlocks();
+            if (after.length <= blocks.length) { break; }
+            blocks = after;
+            guard += 1;
+          }
+          while (blocks.length > need) {
+            var last = blocks[blocks.length - 1];
+            if (!last || !last.parentNode) { break; }
+            last.parentNode.removeChild(last);
+            blocks = discBlocks();
+          }
+          return blocks;
+        };
+        var fitTrackRows = function (block, need) {
+          if (!block) { return; }
+          var body = block.querySelector("tbody") || block;
+          var rows = Array.prototype.slice.call(
+            body.querySelectorAll("tr.track-row"));
+          var addOne = block.querySelector('[data-track-add="1"]');
+          var guard = 0;
+          while (rows.length < need && addOne && guard < 200) {
+            addOne.click();
+            var after = Array.prototype.slice.call(
+              body.querySelectorAll("tr.track-row"));
+            if (after.length <= rows.length) { break; }
+            rows = after;
+            guard += 1;
+          }
+          while (rows.length > need) {
+            var last = rows[rows.length - 1];
+            if (!last || !last.parentNode) { break; }
+            last.parentNode.removeChild(last);
+            rows = Array.prototype.slice.call(
+              body.querySelectorAll("tr.track-row"));
+          }
+        };
+
+        fitPairRows("credit", Math.max(listOf("credit_role").length,
+                                      listOf("credit_name").length));
+        fitPairRows("url", Math.max(listOf("url_key").length,
+                                    listOf("url_value").length));
+        // 曲目: track_disc 决定分碟, 每碟的行数按草稿里该碟的条数来
+        var discs = [];
+        var perDisc = {};
+        listOf("track_disc").forEach(function (one) {
+          var d = String(one || "1");
+          if (!Object.prototype.hasOwnProperty.call(perDisc, d)) {
+            discs.push(d);
+            perDisc[d] = 0;
+          }
+          perDisc[d] += 1;
+        });
+        if (discs.length) {
+          var blocks = fitDiscs(discs.length);
+          blocks.forEach(function (block, i) {
+            fitTrackRows(block, perDisc[discs[i]] || 0);
+          });
+        }
+
         Object.keys(values).forEach(function (name) {
-          var list = Array.isArray(values[name]) ? values[name] : [values[name]];
+          var list = listOf(name);
           var els = form.querySelectorAll('[name="' + name + '"]');
           Array.prototype.forEach.call(els, function (el, i) {
             if (el.type === "file") { return; }
-            if (i < list.length) {
+            if (el.type === "radio" || el.type === "checkbox") {
+              // 草稿只记选中的项 -> 按值比对还原勾选状态
+              el.checked = list.indexOf(el.value) !== -1;
+            } else if (i < list.length) {
               el.value = list[i];
-              el.dispatchEvent(new Event("input", { bubbles: true }));
+            } else {
+              return;
             }
+            // input 让字数统计/职责汇总跟着变; change 让 chip 类控件
+            // (setupBindFields / setupPeopleChips) 重建隐藏域对应的 chip
+            el.dispatchEvent(new Event("input", { bubbles: true }));
+            el.dispatchEvent(new Event("change", { bubbles: true }));
           });
         });
         bar.textContent = "草稿已恢复";
+        if (restore.parentNode) { restore.parentNode.removeChild(restore); }
       });
       bar.parentNode.appendChild(restore);
     } catch (err) { /* 解析失败忽略 */ }
@@ -632,26 +757,34 @@
       if (artistsHidden) { artistsHidden.value = order.join("\n"); }
     }
 
+    /* 只造一个行内 chip, 不碰隐藏域(隐藏域已经是真相时用) */
+    function addChipOnly(row, name) {
+      var value = String(name || "").trim();
+      if (!row || !value) { return false; }
+      if (valuesOf(row).indexOf(value) !== -1) { return true; }
+      var box = row.querySelector(".credit-people-chips");
+      if (!box) { return false; }
+      var chip = document.createElement("span");
+      chip.className = "credit-person-chip";
+      chip.setAttribute("data-name", value);
+      chip.textContent = value;
+      var del = document.createElement("button");
+      del.type = "button";
+      del.className = "credit-person-x";
+      del.setAttribute("data-credit-person-del", "1");
+      del.setAttribute("aria-label", "移除 " + value);
+      del.textContent = "×";
+      chip.appendChild(del);
+      box.appendChild(chip);
+      return true;
+    }
+
     /* 行内加一个人 */
     function addPersonToRow(row, name) {
       var value = String(name || "").trim();
       if (!value) { return false; }
       if (valuesOf(row).indexOf(value) !== -1) { writeValues(row); return true; }
-      var box = row.querySelector(".credit-people-chips");
-      if (box) {
-        var chip = document.createElement("span");
-        chip.className = "credit-person-chip";
-        chip.setAttribute("data-name", value);
-        chip.textContent = value;
-        var del = document.createElement("button");
-        del.type = "button";
-        del.className = "credit-person-x";
-        del.setAttribute("data-credit-person-del", "1");
-        del.setAttribute("aria-label", "移除 " + value);
-        del.textContent = "×";
-        chip.appendChild(del);
-        box.appendChild(chip);
-      }
+      addChipOnly(row, value);
       writeValues(row);
       rebuildSummary();
       return true;
@@ -694,6 +827,24 @@
     card.addEventListener("input", function (e) {
       var t = e.target;
       if (!t || t.name !== "credit_role") { return; }
+      rebuildSummary();
+    });
+
+    /* ---- 隐藏域 credit_name 被外部改写时重建该行 chip ----
+       恢复草稿只改表单值并派发 change; 若这里不重建 chip, 页面看似空的,
+       下一次任何交互又会用 chip 里的旧值把 credit_name 覆盖回去
+       (用户 m11689: 草稿恢复后字段不全)。 */
+    card.addEventListener("change", function (e) {
+      var t = e.target;
+      if (!t || t.name !== "credit_name") { return; }
+      var row = t.closest(".credit-row");
+      var box = row ? row.querySelector(".credit-people-chips") : null;
+      if (!box) { return; }
+      box.textContent = "";
+      String(t.value || "").split(/[\n、]+/).forEach(function (part) {
+        var name = part.trim();
+        if (name) { addChipOnly(row, name); }
+      });
       rebuildSummary();
     });
 
