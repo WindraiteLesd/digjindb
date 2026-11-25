@@ -255,7 +255,20 @@
   function applyCover(url) {
     var box = ibMsg();
     var hint = document.querySelector('[name="cover_url_hint"]');
-    if (hint) { hint.value = url || ""; }
+    // local: 开头是"库里已经有这张本地封面文件"的记号(见 dddb/infobox.py build)。
+    // 它不是能下载的地址, POST 出去必然被 is_public_image_url() 拒掉,
+    // 以前就是它把"封面没自动缓存"变成常态的 —— 直接跳过, 保留现有封面。
+    var raw = String(url || "").trim();
+    if (!raw || /^local:/i.test(raw) || !/^https?:\/\//i.test(raw)) {
+      if (hint) { hint.value = ""; }
+      if (box) {
+        box.textContent = raw
+          ? "封面已是本地文件，不需要重新抓取"
+          : "没有封面地址";
+      }
+      return false;
+    }
+    if (hint) { hint.value = raw; }
     var cacheField = document.getElementById("cover-cache");
     var form = document.querySelector("form.edit-form");
     var token = form && form.querySelector('input[name="csrf_token"]');
@@ -267,7 +280,7 @@
     }
     var body = new URLSearchParams();
     body.set("csrf_token", token);
-    body.set("url", url);
+    body.set("url", raw);
     if (box) { box.textContent = "正在缓存封面…"; }
     fetch("/cover-cache/new", {
       method: "POST",
