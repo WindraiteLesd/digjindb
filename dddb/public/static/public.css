@@ -628,7 +628,10 @@ a:hover { text-decoration: underline; }
 }
 .rows { display: grid; gap: 10px; }
 .pair-row { display: grid; gap: 10px; grid-template-columns: minmax(140px, 220px) minmax(0, 1fr); }
+/* 保存 / 取消 / 合并 / 删除: 整排**右对齐**(用户 m13899)。
+   以前靠 .field-actions 默认的 flex-start 挤在左边, 和编辑页右边的卡片对不齐。 */
 .edit-actions { margin-top: 18px; gap: 10px; }
+.edit-actions-end { justify-content: flex-end; flex-wrap: wrap; }
 .edit-actions button {
   flex: none; background: linear-gradient(140deg, var(--accent), var(--accent-2));
   color: #0b1220; font-weight: 600; border: 1px solid transparent;
@@ -1034,6 +1037,8 @@ a:hover { text-decoration: underline; }
 .title-row .page-title { margin: 0; }
 .title-actions { display: inline-flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .title-actions .btn-ghost, .title-actions .btn { white-space: nowrap; }
+/* 标题行右侧那一组: 同一排但靠右(用户 m13899) */
+.title-actions-end { margin-left: auto; }
 /* ==========================================================================
    主题系统
    - 默认(暗) / 明亮 / 暖色 / 高对比 / 森林 / 樱花
@@ -1895,16 +1900,9 @@ img[src^="/avatar/"] {
 }
 
 /* ==========================================================================
-   详情页: 操作条在卡片上方 / 曲目展开补充信息
+   详情页: 操作按钮在标题行右侧 / 曲目展开补充信息
    ========================================================================== */
 .detail-wrap { margin-bottom: 16px; }
-.detail-actions {
-  display: flex;
-  gap: 8px;
-  justify-content: flex-end;
-  flex-wrap: wrap;
-  margin-bottom: 10px;
-}
 
 /* 合并区块里的社团排在第一位 —— 视觉上稍作强调 */
 .entity-panel .entities .entity-item[data-kind="circle"]:first-child .entity-chip,
@@ -3262,9 +3260,27 @@ body.crop-open { overflow: hidden; }
   display: flex; align-items: center; justify-content: center;
   position: relative; cursor: pointer;
 }
+/* 加号用两条杠**画**出来: 全角「＋」的竖笔在不少中文字体里不是居中的,
+   看起来就是歪的(用户 m13899)。绝对定位 + 伪元素能做到像素级对称。 */
 .cover-add-thumb .cover-plus {
-  font-size: 30px; line-height: 1; opacity: .55;
+  position: relative;
+  display: block;
+  width: 34px;
+  height: 34px;
+  opacity: .55;
 }
+.cover-add-thumb .cover-plus::before,
+.cover-add-thumb .cover-plus::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  background: currentColor;
+  border-radius: 2px;
+  transform: translate(-50%, -50%);
+}
+.cover-add-thumb .cover-plus::before { width: 30px; height: 3px; }
+.cover-add-thumb .cover-plus::after { width: 3px; height: 30px; }
 .cover-add-thumb:hover .cover-plus {
   opacity: 1; color: var(--accent, #4f8cff);
 }
@@ -3287,7 +3303,7 @@ body.crop-open { overflow: hidden; }
 /* 草稿历史面板(m13494: 可回到某个时段的草稿版本) */
 .draft-history-panel {
   flex: 1 1 100%; margin-top: 8px; padding: 8px 10px;
-  border: 1px solid var(--line, #2a2f3a); border-radius: 8px;
+  border: 1px solid var(--border); border-radius: 8px;
   max-height: 260px; overflow: auto;
 }
 .draft-history-panel[hidden] { display: none; }
@@ -3300,15 +3316,47 @@ body.crop-open { overflow: hidden; }
   flex: 1 1 auto; opacity: .8; font-variant-numeric: tabular-nums;
 }
 
-/* 合并专辑: 与删除一样在主表单之外, 单独一行表单 */
+/* 「重复专辑合并」弹窗(用户 m13899: 点按钮才弹, 合并内容可勾选) */
 #merge-album-form {
-  display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
-  margin: 16px 0 0; padding: 12px 14px;
-  border: 1px dashed var(--line, #2a2f3a); border-radius: 10px;
+  position: fixed; inset: auto; top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 8000;
+  width: min(520px, calc(100vw - 32px));
+  max-height: calc(100vh - 64px); overflow: auto;
+  margin: 0; padding: 18px 20px 16px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--panel, #211d1a);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, .55);
+  display: flex; flex-direction: column; gap: 6px;
 }
-#merge-album-form .field-label { font-size: 12px; opacity: .8; }
-#merge-album-form input[type="text"] { flex: 1 1 260px; min-width: 0; }
-#merge-album-form .field-hint { flex: 1 1 100%; margin: 0; }
+#merge-album-form[hidden] { display: none; }
+#merge-album-form .merge-title { margin: 0 0 4px; font-size: 16px; }
+#merge-album-form .field-label { font-size: 12px; opacity: .8; margin-top: 6px; }
+#merge-album-form input[type="text"] { width: 100%; box-sizing: border-box; }
+#merge-album-form .field-hint { margin: 0; font-size: 12px; }
+.merge-parts {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 4px 14px;
+  margin: 10px 0 4px; padding: 10px 12px;
+  border: 1px solid var(--border-soft); border-radius: 9px;
+}
+.merge-part {
+  display: flex; align-items: flex-start; gap: 7px;
+  font-size: 13px; line-height: 1.5; cursor: pointer;
+}
+.merge-part input { margin: 3px 0 0; flex: 0 0 auto; }
+.merge-actions {
+  display: flex; justify-content: flex-end; gap: 10px; margin-top: 12px;
+}
+/* 弹窗背后的遮罩: 由 JS 加/去这个类 */
+body.merge-open::before {
+  content: "";
+  position: fixed; inset: 0; z-index: 7999;
+  background: rgba(0, 0, 0, .55);
+}
+@media (max-width: 560px) {
+  .merge-parts { grid-template-columns: 1fr; }
+}
 
 /* 裁切弹窗的 1:1 锁定开关 */
 .crop-square {
