@@ -224,6 +224,57 @@ class TestPasteTemplate(unittest.TestCase):
         self.assertIn("display: flex", rule(".trk-paste-modes"))
 
 
+class TestPasteSubmitButton(TestPasteTemplate):
+    """粘贴区自己的提交按钮: 用户粘完一整段要有个能点的东西.
+
+    历史: 这个折叠区以前只有一句「保存时随表单一起提交」, 没有任何按钮
+    (用户截图报「这里的提交按钮没了」)。因为公开端零脚本, 按钮只能是普通
+    submit —— 整张表单一起 POST, 服务端再解析 track_paste。
+    """
+
+    def test_paste_block_has_its_own_submit_button(self) -> None:
+        block = self.paste_block(self.render())
+        self.assertIn('type="submit"', block)
+        self.assertIn("保存并填入曲目表", block)
+        self.assertIn('data-track-apply="1"', block)
+
+    def test_button_submits_the_whole_form(self) -> None:
+        """按钮不是 formaction/独立表单, 必须继承外层 edit-form 的 action."""
+        page = self.render()
+        block = self.paste_block(page)
+        self.assertNotIn("formaction", block)
+        self.assertNotIn("<form", block)
+        form_start = page.index('class="edit-form"')
+        self.assertLess(form_start, page.index('data-track-apply="1"'))
+        self.assertLess(page.index('data-track-apply="1"'), page.index("</form>", form_start))
+
+    def test_old_hint_only_copy_is_gone(self) -> None:
+        """旧的那句纯说明(带分号后跟"没识别出曲目时…")已被按钮行取代."""
+        page = self.render()
+        self.assertNotIn("保存时随表单一起提交并自动填入下方曲目表", page)
+        block = self.paste_block(page)
+        self.assertIn("trk-paste-acts", block)
+        self.assertIn("会连同其它字段一起保存", block)
+        self.assertIn("没识别出曲目时曲目表保持原样", block)
+
+    def test_button_appears_in_new_album_page_too(self) -> None:
+        page = self.render(creating=True)
+        block = self.paste_block(page)
+        self.assertIn('data-track-apply="1"', block)
+
+    def test_css_lays_out_the_button_row(self) -> None:
+        def rule(selector: str) -> str:
+            match = re.search(re.escape(selector) + r"\s*\{([^}]*)\}", self.CSS)
+            return match.group(1) if match else ""
+
+        acts = rule(".trk-paste-acts")
+        self.assertIn("display: flex", acts)
+        self.assertIn("align-items: center", acts)
+        self.assertIn("flex-wrap: wrap", acts)
+        self.assertIn("padding", rule(".trk-paste-acts .btn"))
+        self.assertIn("flex: 1 1", rule(".trk-paste-acts .trk-paste-hint"))
+
+
 # --------------------------------------------------------------------------
 # 2. 合并纯函数
 # --------------------------------------------------------------------------
