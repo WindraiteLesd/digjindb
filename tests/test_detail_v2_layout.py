@@ -44,26 +44,34 @@ def _detail(album=None, **kwargs):
         ctx, album=album or _album(), **kwargs)
 
 
-class TestActionsAboveCard(unittest.TestCase):
-    """编辑/修改记录按钮移到卡片上方."""
+class TestActionsInTitleRow(unittest.TestCase):
+    """编辑/修改记录按钮跟「新建专辑」同一排(用户 m13899)。"""
 
     def setUp(self) -> None:
         self.html = _detail()
 
-    def test_actions_container_exists(self) -> None:
-        self.assertIn('class="detail-actions"', self.html)
+    def test_actions_in_title_row(self) -> None:
+        """按钮在标题行的右侧组里, 不再单独占一行。"""
+        self.assertIn('class="title-actions title-actions-end"', self.html)
+        self.assertNotIn('class="detail-actions"', self.html)
 
     def test_actions_before_card(self) -> None:
-        pos_act = self.html.find("detail-actions")
+        pos_act = self.html.find("title-actions-end")
         pos_card = self.html.find('<div class="detail">')
         self.assertGreaterEqual(pos_act, 0)
         self.assertLess(pos_act, pos_card, "按钮要在卡片之前")
 
-    def test_buttons_not_in_title_row(self) -> None:
-        pos_title = self.html.find("detail-title")
-        seg = self.html[pos_title:self.html.find("</div>", pos_title)]
-        self.assertNotIn("编辑这张专辑", seg,
-                         "按钮不该挤在标题行里")
+    def test_buttons_share_title_row_with_new_album(self) -> None:
+        """左侧「新建专辑」与右侧两个按钮属于同一行, 样式同为 btn-ghost btn-xs。"""
+        pos_title = self.html.find('<div class="title-row">')
+        pos_actions = self.html.find('class="title-actions title-actions-end"')
+        self.assertGreaterEqual(pos_title, 0)
+        self.assertGreater(pos_actions, pos_title)
+        seg = self.html[pos_actions:self.html.find("</span>", pos_actions)]
+        self.assertIn("编辑这张专辑", seg)
+        self.assertIn("修改记录", seg)
+        self.assertIn("btn-ghost", seg)
+        self.assertIn("btn-xs", seg)
 
     def test_both_buttons_present(self) -> None:
         self.assertIn("编辑这张专辑", self.html)
@@ -190,9 +198,11 @@ class TestJsAndCss(unittest.TestCase):
     def test_css_has_styles(self) -> None:
         css = (ROOT / "dddb/public/static/public.css").read_text(
             encoding="utf-8")
-        for token in (".detail-actions", ".track-toggle", ".track-extra",
+        for token in (".title-actions-end", ".track-toggle", ".track-extra",
                       ".track-extra-row"):
             self.assertIn(token, css, f"缺样式 {token}")
+        # 旧的独立操作条已经并进标题行, 样式也清掉了
+        self.assertNotIn(".detail-actions", css)
 
 
 if __name__ == "__main__":
