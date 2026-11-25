@@ -91,9 +91,10 @@ class TestProfileSections(unittest.TestCase):
         self.assertIn("关注", html)
         self.assertIn("某社团", html)
         self.assertIn("ARForest", html)
-        # 社团/艺人要给站内链接
+        # 社团/艺人要给站内链接(卡片化之后是 /circle/ 与 /artist/)
         self.assertIn("/circle/", html)
-        self.assertIn("/albums?q=", html)
+        self.assertIn("/artist/", html)
+        self.assertIn('class="follow-card"', html)
 
     def test_contributions(self) -> None:
         html = _page()
