@@ -204,6 +204,10 @@ USER_EXTRA_COLUMNS: tuple[tuple[str, str], ...] = (
     ("is_active", "INTEGER NOT NULL DEFAULT 1"),
     # 上次登录环境指纹(sha256(ip|ua)); 换了环境要发邮件确认
     ("last_env_hash", "TEXT NOT NULL DEFAULT ''"),
+    # 最后活跃时间(用户 m14663): ``last_login`` 只记「登录那一刻」, 用它当
+    # 「最后活跃」是错的 —— 有人登录一次连着用一周, 资料页会一直显示那一天。
+    # 这一列由 :meth:`UserStore.touch_seen` 在每次请求时(节流)刷新。
+    ("last_seen", "REAL NOT NULL DEFAULT 0"),
 )
 
 #: ``invite_codes`` 表的增量列(``created_by``: 让编辑者自己发邀请码之后才有的列).
@@ -637,6 +641,10 @@ class UserStore:
             "role_label": role_label(role),
             "created_at": float(row["created_at"] or 0.0),
             "last_login": float(row["last_login"] or 0.0),
+            # 最后活跃: 老库还没写过这一列时回退到 last_login, 免得资料页
+            # 变成「最后活跃 —」。两者都是 unix 时间戳。
+            "last_seen": float(cls._row_value(row, "last_seen", 0.0) or 0.0)
+            or float(row["last_login"] or 0.0),
             "email": normalize_email(cls._row_value(row, "email", "")),
             "email_verified": bool(int(mode or 0)),
             "verified_at": float(cls._row_value(row, "verified_at", 0.0) or 0.0),
@@ -879,6 +887,40 @@ class UserStore:
                       (str(env_hash or "")[:128], int(user["id"])))
         return True
 
+    # -- 最后活跃(用户 m14663) ----------------------------------------------
+
+    def touch_seen(self, user_id: Any, *, now: float | None = None,
+                   min_gap: float = 300.0) -> bool:
+        """把「最后活跃」推到当下. 距上次记录不足 ``min_gap`` 秒就直接跳过.
+
+        为什么节流: 一次页面浏览会带出 css/js/图片好几个请求, 每次都写库
+        既浪费又把 sqlite 写锁抢得很频繁。5 分钟粒度对「最后活跃」这种展示
+        完全够用。返回是否真的写了。
+        """
+        try:
+            number = int(user_id)
+        except (TypeError, ValueError):
+            return False
+        if number <= 0:
+            return False
+        stamp = time.time() if now is None else float(now)
+        row = self._one("SELECT last_seen FROM users WHERE id = ?", (number,))
+        if row is None:
+            return False
+        try:
+            previous = float(row["last_seen"] or 0.0)
+        except (TypeError, ValueError):  # pragma: no cover - 防御性
+            previous = 0.0
+        if previous and 0 <= stamp - previous < max(0.0, float(min_gap)):
+            return False
+        try:
+            self._execute("UPDATE users SET last_seen = ? WHERE id = ?",
+                          (stamp, number))
+        except sqlite3.Error:  # pragma: no cover
+            logger.warning("刷新 last_seen 失败: %s", number)
+            return False
+        return True
+
     def mark_email_verified(self, username: Any, *, now: float | None = None) -> tuple[bool, str]:
         """把账号标记为"邮箱已验证"(验证码通过 / 管理员救急)."""
         user = self.get(username)
@@ -985,10 +1027,15 @@ class UserStore:
         # 超过 24 小时仍未验证的账号会被 purge_unverified() 删除。
         stamp = time.time() if now is None else float(now)
         try:
-            self._execute("UPDATE users SET last_login = ? WHERE id = ?", (stamp, int(row["id"])))
+            # 登录同时把「最后活跃」推到当下 —— 否则资料页会拿很久以前
+            # 的上次登录冒充活跃时间。
+            self._execute(
+                "UPDATE users SET last_login = ?, last_seen = ? WHERE id = ?",
+                (stamp, stamp, int(row["id"])))
         except sqlite3.Error:  # pragma: no cover - 时间戳写不进去不该拦住登录
             logger.warning("刷新 last_login 失败: %s", name)
         user["last_login"] = stamp
+        user["last_seen"] = stamp
         return LoginResult(True, LOGIN_OK, user, "")
 
     def check_login(self, username: Any, password: Any, *,
@@ -1408,7 +1455,7 @@ def _fmt_user(row: Mapping[str, Any]) -> str:
     flags.append("启用" if row.get("is_active", True) else "**禁用**")
     if row.get("email"):
         flags.append(f"邮箱{'已验证' if row.get('email_verified') else '未验证'}")
-    last = row.get("last_login") or 0
+    last = row.get("last_seen") or row.get("last_login") or 0
     last_text = _time_text(last) if last else "从未"
     return (
         f"{row['id']:>4}  {row['username']:<20} {row['role']:<10} "
