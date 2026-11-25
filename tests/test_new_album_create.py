@@ -257,6 +257,148 @@ class TestMergeAlbumsMergesCreditsAndPhotos(unittest.TestCase):
         self.assertIsNone(self.store.get_album("k|drop|2026"))
 
 
+class TestMergePartsSelection(unittest.TestCase):
+    """合并**只并勾选的部分**(用户 m13899).
+
+    早先 ``want = set(MERGE_PARTS)`` 拿到的是 (键, 中文名) 元组集合, 与用户
+    勾选的字符串键取交集后永远是空 —— 界面说"合并成功", 实际什么都没并。
+    """
+
+    def setUp(self):
+        self.tmp = _tmp.temp_path("mergeparts")
+        self.store = db_mod.Store(self.tmp / "t.sqlite3")
+        from dddb.models import Album
+
+        self.store.upsert_album(Album.from_dict({
+            "key": "k|keep|2026", "title": "Keep", "circle": "C",
+            "description": "目标的简介",
+            "credits": [{"name": "丙", "role": "compose"}],
+        }))
+        self.store.upsert_album(Album.from_dict({
+            "key": "k|drop|2026", "title": "Drop",
+            "description": "被并的简介",
+            "credits": [{"name": "丁", "role": "arrange"}],
+            "tracks": [{"disc": 1, "num": 1, "title": "曲一", "artists": ["甲"]}],
+            "urls": {"Booth": "https://example.com/x"},
+            "photos": [{"url": "/photo/k/b.png"}],
+        }))
+
+    def tearDown(self):
+        self.store.close()
+        import shutil
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _merged(self, *parts):
+        self.assertTrue(self.store.merge_albums(
+            "k|keep|2026", "k|drop|2026", parts=list(parts) or None))
+        return self.store.get_album("k|keep|2026")
+
+    def test_option_keys_are_real_keys(self):
+        """templates 的勾选项必须与 db.MERGE_PARTS 的键一一对应."""
+        from dddb.public import templates as T
+
+        self.assertEqual([k for k, _ in T._MERGE_PART_OPTIONS],
+                         [k for k, _ in db_mod.MERGE_PARTS])
+        self.assertTrue(T._MERGE_DEFAULT <= set(k for k, _ in db_mod.MERGE_PARTS))
+
+    def test_tracks_only(self):
+        album = self._merged("tracks")
+        self.assertEqual([t.title for t in album.tracks], ["曲一"])
+        # 没勾制作人员 -> 不该把对方的词条并过来
+        self.assertEqual([c.role for c in album.credits], ["compose"])
+        self.assertEqual(album.description, "目标的简介")
+        self.assertNotIn("Booth", album.urls)
+
+    def test_credits_only(self):
+        album = self._merged("credits")
+        self.assertEqual(sorted(c.role for c in album.credits),
+                         ["arrange", "compose"])
+        self.assertEqual(album.tracks, [])
+
+    def test_description_only(self):
+        # 保留项已有简介 -> 被并项的不覆盖
+        album = self._merged("description")
+        self.assertEqual(album.description, "目标的简介")
+
+    def test_meta_fills_missing_circle(self):
+        from dddb.models import Album
+
+        self.store.upsert_album(Album.from_dict({
+            "key": "k|empty|2026", "title": "Empty"}))
+        self.store.upsert_album(Album.from_dict({
+            "key": "k|full|2026", "title": "Full", "circle": "社团全",
+            "release_date": "2026-01-01", "catalog_no": "X-1"}))
+        self.store.merge_albums("k|empty|2026", "k|full|2026", parts=["meta"])
+        album = self.store.get_album("k|empty|2026")
+        self.assertEqual(album.circle, "社团全")
+        self.assertEqual(album.release_date, "2026-01-01")
+        self.assertEqual(album.catalog_no, "X-1")
+
+    def test_none_means_everything(self):
+        """命令行/旧调用方传 None 仍是全量合并."""
+        album = self._merged()
+        self.assertEqual([t.title for t in album.tracks], ["曲一"])
+        self.assertEqual(sorted(c.role for c in album.credits),
+                         ["arrange", "compose"])
+        self.assertIn("Booth", album.urls)
+        self.assertEqual([p["url"] for p in album.photos], ["/photo/k/b.png"])
+
+    def test_unknown_part_is_ignored(self):
+        album = self._merged("tracks", "nonexistent")
+        self.assertEqual([t.title for t in album.tracks], ["曲一"])
+
+
+class TestMergeDialogMarkup(unittest.TestCase):
+    """编辑页的「重复专辑合并」是弹窗 + 勾选项, 不是一行输入框."""
+
+    @staticmethod
+    def _html(creating=False):
+        from dddb.public import templates as T
+
+        album = {} if creating else {"key": "a|b|2026", "title": "A"}
+        return T.edit_album_page(
+            T.SiteContext(csrf_token="t", is_editor=True, lang="zh"),
+            album=album, values={}, creating=creating)
+
+    def test_edit_page_has_dialog(self):
+        html = self._html()
+        self.assertIn('id="merge-album-form"', html)
+        self.assertIn("重复专辑合并", html)
+        self.assertIn("data-merge-open", html)
+        # 弹窗默认隐藏, 不要一进页面就糊在内容上
+        self.assertIn("hidden", html)
+
+    def test_dialog_has_part_checkboxes(self):
+        from dddb.public import templates as T
+
+        html = self._html()
+        for part_key, label in T._MERGE_PART_OPTIONS:
+            self.assertIn('name="part"', html)
+            self.assertIn('value="{}"'.format(part_key), html)
+            self.assertIn(label, html)
+        self.assertEqual(html.count('name="part"'),
+                         len(T._MERGE_PART_OPTIONS))
+
+    def test_default_checked_parts(self):
+        from dddb.public import templates as T
+
+        html = self._html()
+        # 曲目/制作人员/外链/照片 默认勾, 封面与基本信息默认不勾
+        for part_key in T._MERGE_DEFAULT:
+            self.assertIn('value="{}" checked'.format(part_key), html)
+        self.assertNotIn('value="cover" checked', html)
+        self.assertNotIn('value="meta" checked', html)
+
+    def test_new_page_has_no_merge(self):
+        self.assertNotIn('id="merge-album-form"', self._html(creating=True))
+
+    def test_dialog_is_outside_main_form(self):
+        """HTML 不允许嵌套 form —— 合并表单必须在主表单</form>之后."""
+        html = self._html()
+        main_end = html.rindex("</form>", 0, html.index('id="merge-album-form"'))
+        self.assertGreater(main_end, 0)
+
+
 class TestSaveNewPhotos(unittest.TestCase):
     """新建页带上的其他照片(data URL) -> 建完专辑再落盘."""
 
@@ -387,16 +529,43 @@ class TestFrontendWiring(unittest.TestCase):
 
     def test_css_has_new_blocks(self):
         for name in (".cover-add-thumb", ".photo-list", ".draft-history-panel",
-                     "#merge-album-form"):
+                     "#merge-album-form", ".merge-parts", ".merge-part",
+                     ".merge-actions", ".edit-actions-end",
+                     ".title-actions-end"):
             self.assertIn(name, CSS, name)
+
+    def test_merge_dialog_js(self):
+        self.assertIn("function setupMergeDialog()", JS)
+        self.assertIn("setupMergeDialog();", JS)
+        self.assertIn("merge-open", JS)
+
+    def test_plus_icon_is_css_drawn(self):
+        """加号必须用两条伪元素画: 全角「＋」在不同中文字体里是歪的."""
+        block = CSS.split(".cover-add-thumb .cover-plus")[1].split("}")[0]
+        self.assertIn("width", block)
+        self.assertIn(".cover-add-thumb .cover-plus::before", CSS)
+        self.assertIn(".cover-add-thumb .cover-plus::after", CSS)
+
+    def test_title_row_actions_do_not_nest_wrap(self):
+        """「新建专辑」不该套 .wrap —— 那是整页容器, 套进去会缩进+撑高."""
+        name = "_entity_buttons"
+        src = inspect.getsource(getattr(T, name))
+        self.assertNotIn('class="wrap"', src)
 
 
 class TestVersionsBumped(unittest.TestCase):
     def test_css_and_js_versions(self):
+        """静态资源版本号一改, 浏览器才会拿到新 CSS/JS.
+
+        断言「至少是某个版本」而不是等于某个具体数字 —— 否则每次改版都
+        得回来改这条测试(已经改过好几轮了)。
+        """
         html = T.edit_album_page(_ctx(), album={}, values={}, errors={},
                                  creating=True)
-        self.assertIn("public.css?v=76", html)
-        self.assertIn("public.js?v=66", html)
+        for name, floor in (("public.css", 77), ("public.js", 67)):
+            match = re.search(name + r"\?v=(\d+)", html)
+            self.assertIsNotNone(match, name + " 没被引用")
+            self.assertGreaterEqual(int(match.group(1)), floor)
 
 
 class TestSourceHasNoStaleText(unittest.TestCase):
