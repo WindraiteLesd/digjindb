@@ -564,7 +564,7 @@ def layout(
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
 <title>{esc(title)} · {esc(ctx.site_name)}</title>
-<link rel="stylesheet" href="/static/public.css?v=78">
+<link rel="stylesheet" href="/static/public.css?v=79">
 <!-- ?v=2: 图标换过, 但静态资源被 CF/浏览器缓存 1 天, 加版本号强制刷新 -->
 <link rel="icon" href="/static/favicon.svg?v=2" type="image/svg+xml">
 <!-- 唯一的脚本: 同源外链, 只做渐进增强(CSP 只给 script-src 'self') -->
@@ -5080,8 +5080,15 @@ def edit_album_page(
         f'<label class="trk-mode"><input type="radio" name="track_mode" value="append"{append_checked}>'
         " 追加到末尾</label>"
         "</div>"
-        '<p class="trk-paste-hint muted">保存时随表单一起提交并自动填入下方曲目表; '
-        "没识别出曲目时曲目表保持原样(表单里其它字段照常保存)。</p>"
+        # 粘贴区自己的提交按钮: 以前这里只有一句「保存时随表单一起提交」,
+        # 用户粘完一大段找不到可以点的东西(截图报「这里的提交按钮没了」)。
+        # 公开端没有 AJAX, 所以它就是个普通 submit —— 整张表单一起交给服务端,
+        # 由 dddb/trackparse.py 解析 track_paste 后并进曲目表。
+        '<div class="trk-paste-acts">'
+        '<button type="submit" class="btn" data-track-apply="1">保存并填入曲目表</button>'
+        '<span class="trk-paste-hint muted">会连同其它字段一起保存; '
+        "没识别出曲目时曲目表保持原样。</span>"
+        "</div>"
         "</div>"
         "</details>"
     )
