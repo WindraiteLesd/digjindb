@@ -77,6 +77,7 @@ from .data import (
 from .ratelimit import RateLimiter, classify_request, client_ip_from_headers
 from ..imageutil import probe_image_size
 from ..trackparse import parse_tracklist
+from .. import creditparse
 from .users import (
     LOGIN_INACTIVE,
     LOGIN_UNVERIFIED_EMAIL,
@@ -416,6 +417,8 @@ _ROUTE_MAP = {
     "reset": "reset",
     "review": "review",
     "users": "users_admin",
+    # 站务看板: 访问记录 + 编辑改动 + 服务器负载(仅超级用户)
+    "dashboard": "dashboard",
     # 图形验证码(图片) / 邀请码页
     "username-check": "username_check",
     "captcha.svg": "captcha_svg",
@@ -437,6 +440,15 @@ _ENTITY_ROUTES = frozenset({"album", "circle", "event", "tag", "cover", "static"
                               "event-date", "embed", "event_logo", "event_series_page",
                               "event_series_logo", "event_series_poster", "logo",
                               "pending_cover"})
+
+#: 站务看板的访问日志**不记**这些路由: 它们不是"浏览页面"。
+#: 一张专辑详情页会带出 css/js/封面/附图十几个请求, 全记下来以后
+#: "最近访问"就成了资源清单, 看板也就没有意义了。
+_NO_VISIT_ROUTES = frozenset({
+    "static", "cover", "photo", "logo", "avatar", "background",
+    "event_logo", "event_series_logo", "event_series_poster",
+    "pending_cover", "favicon", "robots", "sitemap", "captcha_svg",
+})
 
 #: 索引页路由名 -> 实体路由名(``/circle/<x>`` 缺失时退化为 ``/circles``)
 _INDEX_OF = {"album": "albums", "circle": "circles", "event": "events", "tag": "tags"}
@@ -1296,6 +1308,10 @@ def form_display_values(values: Mapping[str, Sequence[str]]) -> dict[str, Any]:
         # 粘贴框内容在重填时原样还回(粘一次就该够), 模式单选也记住
         "track_paste": raw_field(values, "track_paste"),
         "track_mode": normalize_track_mode(text_field(values, "track_mode")),
+        # 制作人员粘贴框同理(用户 m14663)
+        "credit_paste": raw_field(values, "credit_paste"),
+        "credit_mode": creditparse.normalize_credit_mode(
+            text_field(values, "credit_mode")),
     }
 
 
@@ -1360,6 +1376,34 @@ def normalize_track_mode(value: Any) -> str:
     """单选框值 -> 合法模式(空 / 伪造值 -> ``replace``)."""
     text = str(value or "").strip().lower()
     return text if text in TRACK_MODES else "replace"
+
+
+def merge_credits_from_paste(
+    patch: dict[str, Any],
+    values: Mapping[str, Sequence[str]],
+) -> tuple[bool, bool]:
+    """把「制作人员整段粘贴」并进这次的 ``patch["credits"]``(用户 m14663).
+
+    返回 ``(has_paste, missed)``:
+
+    * ``has_paste``: 用户确实往粘贴框里填了东西;
+    * ``missed``: 填了但一条都没识别出来 —— 调用方据此提示一句, 但**不能**
+      因此否决整次提交(其它字段照常落库, 词条保持表单里原有的那份)。
+
+    解析器见 :mod:`dddb.creditparse`; 括号里的链接会被丢掉, 所以
+    ``音乐: 甲 (https://x.com/a)`` 落到库里是 ``甲`` 而不是一串网址。
+    """
+    paste_text = str(raw_field(values, "credit_paste") or "")
+    if not paste_text.strip():
+        return False, False
+    parsed = creditparse.parse_credits(paste_text)
+    if not parsed:
+        return True, True
+    mode = creditparse.normalize_credit_mode(text_field(values, "credit_mode"))
+    base = [dict(item) for item in (patch.get("credits") or [])
+            if isinstance(item, Mapping)]
+    patch["credits"] = creditparse.merge_pasted_credits(base, parsed, mode)
+    return True, False
 
 
 # --------------------------------------------------------------------------
@@ -1702,6 +1746,8 @@ class PublicSite:
         profiles: Any = None,
         #: 个人中心库路径(默认 ``<root>/data/public_profiles.sqlite3``)
         profiles_path: Path | str | None = None,
+        #: 站务看板的访问日志库路径(默认与 users 库同目录 ``site_visits.sqlite3``)
+        visits_path: Path | str | None = None,
     ) -> None:
         self.data = data
         #: 账号库(独立文件)。不传就开一个内存库, 于是单测零配置也有完整用户系统。
@@ -1757,6 +1803,11 @@ class PublicSite:
         self._profiles_failed = False
         self._profiles_lock = threading.Lock()
         self._avatar_cache: dict[int, tuple[bytes, str, float]] = {}
+        #: 站务看板的访问日志(用户 m14663)。**惰性打开**: 只有真的记一条
+        #: 访问或有人打开看板时才建库, 单测/静态渲染完全不受影响。
+        self._visits_path = Path(visits_path) if visits_path else None
+        self._visits: Any = None
+        self._visits_lock = threading.Lock()
         #: 每个请求线程的界面语言(由 Cookie 决定)
         self._thread_lang = threading.local()
 
@@ -1840,6 +1891,112 @@ class PublicSite:
     def profile_enabled(self) -> bool:
         """个人中心功能是否可用(后端已交付且库能打开)."""
         return self.profile_store() is not None
+
+    # -- 站务看板 -----------------------------------------------------------
+
+    def visits_db_path(self) -> Path:
+        """访问日志库的落盘位置(与 users 同目录, 见 profile_db_path 的说明)."""
+        if self._visits_path:
+            return Path(self._visits_path)
+        users_path = getattr(self.users, "path", None)
+        if users_path and str(users_path) not in (":memory:", "", "None"):
+            return Path(str(users_path)).parent / "site_visits.sqlite3"
+        return (self.data.root or Path.cwd()) / "data" / "site_visits.sqlite3"
+
+    def visit_store(self) -> Any:
+        """访问日志库(惰性打开, 失败返回 ``None``, 页面降级)."""
+        store = self._visits
+        if store is not None:
+            return store
+        with self._visits_lock:
+            if self._visits is not None:
+                return self._visits
+            try:
+                from .visits import VisitStore
+
+                store = VisitStore(self.visits_db_path())
+            except Exception as exc:            # pragma: no cover - 极端环境
+                logger.warning("打开访问日志库失败: %s", exc)
+                return None
+            self._visits = store
+            return store
+
+    def _record_visit(
+        self,
+        path: str,
+        route: Mapping[str, Any] | None,
+        state: Any,
+        headers: Mapping[str, Any] | None,
+        client_ip: str,
+    ) -> None:
+        """记一行访问日志. **尽力而为**, 任何异常都不许冒到请求里."""
+        record = getattr(self.visit_store(), "record", None)
+        if not callable(record):
+            return
+        try:
+            user = getattr(state, "user", None) or {}
+            record(
+                path=str(path or "/")[:300],
+                route=str((route or {}).get("name") or ""),
+                method="GET",
+                user_id=int(user.get("id") or 0),
+                username=str(user.get("username") or ""),
+                client_ip=str(client_ip or ""),
+                ua=str((headers or {}).get("user-agent") or ""),
+            )
+        except Exception:                       # pragma: no cover
+            logger.debug("记录访问失败 path=%s", path, exc_info=True)
+
+    def dashboard_data(self) -> dict[str, Any]:
+        """站务看板要的全部数据(访问统计 + 最近记录 + 服务器负载)."""
+        from .visits import RECENT_LIMIT, VISIT_KEEP_DAYS, server_stats
+
+        store = self.visit_store()
+        disk_path = "/"
+        if store is not None:
+            try:
+                store.purge(keep_days=VISIT_KEEP_DAYS)
+            except Exception:                   # pragma: no cover
+                logger.debug("清理访问日志失败", exc_info=True)
+        recent = store.recent(RECENT_LIMIT) if store is not None else []
+        totals = store.totals() if store is not None else {}
+        routes = store.top_routes() if store is not None else []
+        paths = store.top_paths(limit=10) if store is not None else []
+        return {
+            "enabled": bool(store is not None and getattr(store, "enabled", False)),
+            "totals": totals,
+            "routes": routes,
+            "paths": paths,
+            "recent": recent,
+            "server": server_stats(disk_path=disk_path),
+            "revisions": self.recent_revisions(40),
+        }
+
+    def recent_revisions(self, limit: int = 40) -> list[dict[str, Any]]:
+        """最近的全站改动(站务看板用).
+
+        ``Store.list_revisions`` 只按单张专辑查, 看板要的是全局时间线, 所以这里
+        直接发一条 ``ORDER BY created_at DESC`` 的 SELECT。
+        """
+        query = getattr(self.data, "_query", None)
+        if not callable(query):
+            return []
+        try:
+            rows = query(
+                "SELECT album_key, user_id, username, summary, created_at"
+                " FROM album_revisions ORDER BY created_at DESC, id DESC LIMIT ?",
+                (max(1, int(limit)),),
+            )
+        except Exception:                       # pragma: no cover
+            logger.debug("读最近改动失败", exc_info=True)
+            return []
+        out: list[dict[str, Any]] = []
+        for row in rows or ():
+            try:
+                out.append(dict(row))
+            except Exception:                   # pragma: no cover
+                continue
+        return out
 
     def profile_call(self, name: str, *args: Any, default: Any = None, **kwargs: Any) -> Any:
         """调用 ProfileStore 上一个**可能还不存在**的方法(契约分阶段交付)."""
@@ -2079,6 +2236,9 @@ class PublicSite:
             if state.logged_in and state.session is not None:
                 # 滑动续期: 用户只要还在用, 就不该被踢下线
                 self.sessions.touch(state.session.sid)
+                # 「最后活跃」= 最近一次**请求**的时间(用户 m14663)。
+                # last_login 只是登录那一刻, 拿它当活跃时间是错的。
+                self._touch_seen(state)
             extra_cookies: list[str] = []
             if state.set_anonymous_cookie:
                 # 给匿名访客发一个 CSRF 绑定 Cookie(双重提交)
@@ -2089,6 +2249,10 @@ class PublicSite:
                 response = self._handle_read(route, params, state, extra_cookies, headers)
             else:
                 response = self._handle_write(verb, route, state, headers, body, extra_cookies)
+            # 访问日志(站务看板): 只记页面级请求, 静态资源和图片不记,
+            # 否则一张专辑页就会刷出十几个"访问"。
+            if not head and route.get("name") not in _NO_VISIT_ROUTES:
+                self._record_visit(path, route, state, headers, client_ip)
         except (sqlite3.Error, PublicDataError, UserStoreError) as exc:
             logger.warning("处理 %s %s 失败: %s", verb, path, exc)
             response = Response.html(
@@ -2340,6 +2504,15 @@ class PublicSite:
                     status=403, cookies=cookies,
                 )
             return self._html(self.page_users_admin(state, None, None), cookies=cookies)
+        if name == "dashboard":
+            # 站务看板(用户 m14663): 访问记录 + 编辑改动 + 服务器负载,
+            # 只对超级用户开放, 匿名访问一律 403(不泄露"这里有什么")。
+            if not self.can_review(state):
+                return self._html(
+                    self.forbidden(state, "数据看板只对站务账号开放。"),
+                    status=403, cookies=cookies,
+                )
+            return self._html(self.page_dashboard(state), cookies=cookies)
         if name == "logout":
             # 登出是写操作, 只接受 POST(导航里就是一个带 token 的小表单)。
             return self._html(T.error_page(
@@ -3026,6 +3199,87 @@ class PublicSite:
             return int(state.session.user_id) if state.session else 0
         except (TypeError, ValueError):
             return 0
+
+    # -- 最后活跃 / 访问记录 -------------------------------------------------
+
+    def _touch_seen(self, state: auth.AuthState) -> None:
+        """登录用户每访问一次就刷新「最后活跃」(节流 5 分钟, 见 touch_seen)."""
+        uid = self._member_uid(state)
+        if not uid:
+            return
+        touch = getattr(self.users, "touch_seen", None)
+        if touch is None:                      # pragma: no cover - 防御性
+            return
+        try:
+            touch(uid)
+        except Exception:                      # noqa: BLE001 - 记活跃失败不该影响页面
+            logger.debug("刷新最后活跃失败 uid=%s", uid, exc_info=True)
+
+    def _entity_image(self, kind: str, key: str) -> str:
+        """社团徽标 / 艺人头像. 站内 ``/logo/...`` 与远程直链都原样返回."""
+        name = str(key or "").strip()
+        if not name:
+            return ""
+        table, column = ("circles", "logo_url") if kind == "circle" else ("artists", "avatar")
+        try:
+            rows = self.data._query(
+                f"SELECT payload FROM {table} WHERE name = ? COLLATE NOCASE LIMIT 1",
+                (name,))
+        except (sqlite3.Error, Exception):     # noqa: BLE001 - 只读库可能没有这张表
+            return ""
+        if not rows:
+            return ""
+        try:
+            record = json.loads(rows[0]["payload"] or "{}")
+        except ValueError:
+            return ""
+        image = str(record.get(column) or "")
+        if not image and kind == "circle":
+            image = str(record.get("logo_local") or "")
+        return image
+
+    def _enrich_follows(self, follows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+        """给关注列表补站内链接与头像(用户 m14663: 要显示社团/艺人头像)."""
+        out: list[dict[str, Any]] = []
+        for item in follows or []:
+            entry = dict(item)
+            kind = str(entry.get("kind") or "")
+            key = str(entry.get("key") or "")
+            href = ""
+            if kind == "circle" and key:
+                href = "/circle/" + T.quote_segment(key)
+            elif kind == "artist" and key:
+                href = "/artist/" + urllib.parse.quote(key, safe="")
+            elif kind == "event" and key:
+                href = "/event/" + T.quote_segment(key)
+            entry["href"] = href
+            entry["image"] = (self._entity_image(kind, key)
+                              if kind in ("circle", "artist") else "")
+            out.append(entry)
+        return out
+
+    @staticmethod
+    def _merge_contributions(items: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+        """同一 (kind, target) 的多条贡献并成一条并计数(用户 m14663).
+
+        ``list_contributions`` 按时间倒序返回, 所以第一次出现的那条自带
+        最新的时间与摘要 —— 保留它, 后面只累加次数。
+        """
+        merged: dict[tuple[str, str], dict[str, Any]] = {}
+        order: list[tuple[str, str]] = []
+        for item in items or []:
+            kind = str(item.get("kind") or "")
+            target = str(item.get("target") or "")
+            slot = (kind, target)
+            entry = merged.get(slot)
+            if entry is None:
+                entry = dict(item)
+                entry["count"] = 1
+                merged[slot] = entry
+                order.append(slot)
+            else:
+                entry["count"] = int(entry.get("count") or 1) + 1
+        return [merged[slot] for slot in order]
 
     def _do_comment_action(self, name: str, values: Mapping[str, Any],
                            state: auth.AuthState, cookies: list[str]) -> Response:
@@ -4232,7 +4486,12 @@ class PublicSite:
         # 用户之间不能互相关注, 显示那个人数永远是 0。
         counts = self.profile_call("summary", uid, default={}) or {}
         joined_text = _stamp_text(target.get("created_at"), _lang)
-        active_text = _stamp_text(target.get("last_login"), _lang)
+        # 「最后活跃」用 last_seen(每次请求刷新), 不是 last_login(登录那一刻)。
+        # 老账号还没写过 last_seen 时 _user_dict 会回退到 last_login。
+        active_stamp = target.get("last_seen") or target.get("last_login")
+        active_text = _stamp_text(active_stamp, _lang)
+        follows = self._enrich_follows(follows)
+        contributions = self._merge_contributions(contributions)
         return T.public_profile_page(
             self.context(state), user=target, profile=profile,
             visibility=visibility, viewer=viewer,
@@ -4760,6 +5019,14 @@ class PublicSite:
             notice=notice or "",
         )
 
+    def page_dashboard(self, state: auth.AuthState) -> str:
+        """站务数据看板(用户 m14663). 只有 ``can_review`` 的账号能看到."""
+        data = self.dashboard_data()
+        return T.dashboard_page(
+            self.context(state, active="dashboard"),
+            data=data,
+        )
+
     def _do_users_admin(
         self,
         values: Mapping[str, Sequence[str]],
@@ -4905,6 +5172,9 @@ class PublicSite:
         paste_missed = has_paste and not parsed
         if parsed:
             patch["track_list"] = merge_pasted_tracks(patch.get("track_list") or [], parsed, mode)
+        # 制作人员「整段粘贴」: 同一套语义 —— 解析出词条就按 credit_mode
+        # 替换/追加; 没识别出来只提示一句, 不否决整次保存。
+        credit_has_paste, credit_missed = merge_credits_from_paste(patch, values)
         store = self.writable_store()
         # **编辑前**先记一条快照: 否则"还原到上一版"只会回到改完之后的状态(无法撤销)
         self._record_revision(state, str(key), "编辑前快照")
@@ -4940,13 +5210,18 @@ class PublicSite:
             _has = isinstance(_cur, Mapping) and bool(_cur.get("cover_local"))
             if not _has:
                 self._store_cover_from_url(str(key), _hint)
-        if paste_missed:
+        if paste_missed or credit_missed:
             # 已经存过了: 回显必须说清"这次其它修改生效了", 否则用户会以为保存失败。
+            notes = []
+            if paste_missed:
+                notes.append("粘贴内容没识别出曲目, 曲目表保持原样")
+            if credit_missed:
+                notes.append("粘贴内容没识别出词条, 制作人员保持原样")
             page = T.edit_album_page(
                 self.context(state, active="albums"),
                 album=self.data.get_album(key) or album,
                 values=form_display_values(values),
-                notice="粘贴内容没识别出曲目, 曲目表保持原样; 本次其它修改已保存。",
+                notice="; ".join(notes) + "; 本次其它修改已保存。",
             )
             return self._html(page, cookies=cookies)
         if state.session is not None:
@@ -4954,6 +5229,8 @@ class PublicSite:
             if parsed:
                 action = "追加" if mode == "append" else "替换"
                 note = f" · 粘贴识别 {len(parsed)} 首({action})"
+            if credit_has_paste and patch.get("credits"):
+                note += f" · 词条 {len(patch['credits'])} 条"
             state.session.flash = f"已保存: {patch.get('title') or key}{note}"
             self._record_revision(state, str(key), f"编辑后{note}")
             # 编辑者贡献记录(用户要求"我的贡献: 含修改记录")
@@ -5100,6 +5377,9 @@ class PublicSite:
             self.can_edit(state) and self.db_path is not None
             and getattr(self.data, "covers_dir", None)
         )
+        # 这张专辑是不是被我收藏了(详情页「收藏专辑」按钮, 用户 m14663)
+        is_favorite = bool(uid and self.profile_call(
+            "is_favorite", uid, str(album.get("key") or ""), default=False))
         # 艺人与社团卡片: 悬停显示图片/统计/简介 + 关注按钮(替代底部关注块)
         comment_ids = [int(c.get("id") or 0) for c in comments if c.get("id")]
         like_counts: dict[int, int] = {}
@@ -5175,6 +5455,7 @@ class PublicSite:
             entities_more_names="、".join(artists[12:]),
             comment_likes=like_counts,
             liked_ids=sorted(my_likes),
+            favorite=is_favorite,
         )
 
     def _save_new_photos(self, key: str, values: Mapping[str, Any]) -> int:
@@ -5741,6 +6022,8 @@ class PublicSite:
                         patch["track_list"] = merge_pasted_tracks(
                             patch.get("track_list") or [], parsed,
                             normalize_track_mode(text_field(values, "track_mode")))
+                # 制作人员「整段粘贴」: 与编辑页同一套解析
+                merge_credits_from_paste(patch, values)
                 title = str(patch.get("title_original")
                             or patch.get("title") or "").strip()
                 if not title:
@@ -7226,6 +7509,7 @@ def build_site(
     covers_dir: Path | str | None = None,
     users_db: Path | str | None = None,
     sessions_db: Path | str | None = None,
+    visits_db: Path | str | None = None,
     admin_url: Any = None,
     limiter: RateLimiter | None = None,
     base_url: str | None = None,
@@ -7279,6 +7563,8 @@ def build_site(
         # 封面外链的客户端惰性创建: 平时浏览页面完全不必加载采集栈,
         # 第一次遇到"本地没有的远程封面"时才建(并且遵守 robots + 节流)。
         http_client_factory=lambda: _cover_http_client(config),
+        # 访问日志库与 users 库同目录(线上 /srv/dddb/data), 见 visits_db_path 说明
+        visits_path=visits_db,
     )
     logger.debug(
         "用户端数据: db=%s covers=%s users=%s sessions=%s cover_base=%s",
