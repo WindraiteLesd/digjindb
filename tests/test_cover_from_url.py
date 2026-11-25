@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import re
 import shutil
 import sys
 import unittest
@@ -252,16 +253,25 @@ class TestFrontendWiring(unittest.TestCase):
         self.assertNotIn("封面需手动上传", self.js)
 
     def test_apply_cover_function(self) -> None:
+        """infobox 里的封面地址: 先缓存, 提交时才转正(用户 m13899)。
+
+        以前这里是直接 `POST /album/<key>/cover-url` 写库 —— 填一次表就
+        把封面换了, 编辑者想反悔都没退路。现在走 `/cover-cache/new`,
+        token 存进隐藏域 `cover_cache`, 保存表单时才真正落盘。
+        """
         self.assertIn("function applyCover", self.js)
-        self.assertIn("/cover-url", self.js)
+        self.assertIn("/cover-cache/new", self.js)
         self.assertIn('credentials: "same-origin"', self.js)
+        self.assertNotIn("/cover-url", self.js)
 
     def test_hidden_hint_field(self) -> None:
         self.assertIn('name="cover_url_hint"', self.tpl)
 
     def test_version_bumped(self) -> None:
-        # 本轮又改了 infobox.js(曲目表填充), 版本号继续往上走
-        self.assertIn("infobox.js?v=8", self.tpl)
+        # infobox.js 每轮都改, 用下限断言免得每次改版都要改测试
+        self.assertRegex(self.tpl, r"infobox\.js\?v=(\d+)")
+        ver = int(re.search(r"infobox\.js\?v=(\d+)", self.tpl).group(1))
+        self.assertGreaterEqual(ver, 9)
 
 
 if __name__ == "__main__":
