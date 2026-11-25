@@ -483,7 +483,10 @@ def _entity_buttons(ctx: SiteContext, active: str) -> str:
     kinds = _ACTIVE_NEW_KINDS.get(str(active or ""))
     if not kinds or not ctx.is_editor:
         return ""
-    return '<div class="wrap">' + entity_new_buttons(ctx, kinds) + "</div>"
+    # **不要**再套一层 .wrap: 那是给整页内容定宽/padding 的容器, 塞进
+    # 标题行的按钮组里会让「新建专辑」莫名缩进、还撑出额外高度(用户 m13899
+    # 截图里它与右边的「编辑这张专辑」对不齐)。
+    return entity_new_buttons(ctx, kinds)
 
 
 def _title_actions_html(explicit: str, ctx: SiteContext, active: str) -> str:
@@ -510,6 +513,7 @@ def layout(
     wide: bool = False,
     active: str | None = None,
     title_actions: str = "",
+    title_actions_end: str = "",
 ) -> str:
     """整页外壳(header / main / footer). 所有片段都应当已经转义.
 
@@ -527,6 +531,13 @@ def layout(
         crumb_html = '<nav class="crumbs" aria-label="面包屑">' + "".join(
             f"<span>{c}</span>" for c in crumbs
         ) + "</nav>"
+
+    # 标题行**右侧**的动作(用户 m13899: 「编辑这张专辑 / 修改记录」与左边的
+    # 「新建专辑」同一排、同一套样式, 但各自保持原来的对齐方向)。
+    _title_actions_end_html = (
+        '<span class="title-actions title-actions-end">' + title_actions_end + "</span>"
+        if title_actions_end else ""
+    )
 
     flash_html = ""
     if ctx.flash:
@@ -553,13 +564,13 @@ def layout(
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
 <title>{esc(title)} · {esc(ctx.site_name)}</title>
-<link rel="stylesheet" href="/static/public.css?v=76">
+<link rel="stylesheet" href="/static/public.css?v=78">
 <!-- ?v=2: 图标换过, 但静态资源被 CF/浏览器缓存 1 天, 加版本号强制刷新 -->
 <link rel="icon" href="/static/favicon.svg?v=2" type="image/svg+xml">
 <!-- 唯一的脚本: 同源外链, 只做渐进增强(CSP 只给 script-src 'self') -->
-<script src="/static/public.js?v=66" defer></script>
+<script src="/static/public.js?v=67" defer></script>
 <script src="/static/cover-crop.js?v=6" defer></script>
-<script src="/static/infobox.js?v=8" defer></script>
+<script src="/static/infobox.js?v=9" defer></script>
 </head>
 <body{_bg_attr(ctx)}>
 <a class="skip" href="#content">跳到正文</a>
@@ -587,7 +598,7 @@ def layout(
 {crumb_html}
 <div class="title-row">
 <h1 class="page-title">{esc(title)}</h1>
-{_title_actions_html(title_actions, ctx, active_key)}
+{_title_actions_html(title_actions, ctx, active_key)}{_title_actions_end_html}
 </div>
 {subtitle_html}
 {flash_html}{verify_banner}
@@ -1723,21 +1734,18 @@ def album_detail_page(
 
     edit_btn = ""
     if editor and edit_href:
-        # 编辑 + 修改记录 成对出现: 用户改完能直接点进去看历史/回滚
+        # 编辑 + 修改记录 成对出现: 用户改完能直接点进去看历史/回滚。
+        # 与「新建专辑」**同一排、同一套 btn-ghost btn-xs 样式**(用户 m13899):
+        # 它们都是编辑者动作, 分散在两处、两种尺寸会显得零碎。
         history_href = edit_href[: -len("/edit")] + "/history"
         edit_btn = (
-            f'<a class="btn-ghost" href="{esc(edit_href)}">编辑这张专辑</a>'
-            f'<a class="btn-ghost" href="{esc(history_href)}">修改记录</a>'
+            f'<a class="btn-ghost btn-xs" href="{esc(edit_href)}">编辑这张专辑</a>'
+            f'<a class="btn-ghost btn-xs" href="{esc(history_href)}">修改记录</a>'
         )
 
     # 详情页区块顺序(用户要求):
     #   ① 社团(紧跟标题) ② 艺人/社团 + 制作人员(合并) ③ 简介 ④ 曲目表(可折叠) ⑤ 外链
-    # 编辑/修改记录按钮: **放在卡片上方**(用户要求), 不再挤在标题行里。
-    detail_actions = (
-    f'<div class="detail-actions">{edit_btn}</div>' if edit_btn else ""
-    )
     body = f"""<div class="detail-wrap">
-{detail_actions}
 <div class="detail">
   <div class="detail-cover">{cover_html(album, size="detail", lazy=False)}</div>
   <div class="detail-info">
@@ -1785,6 +1793,8 @@ def album_detail_page(
         body=body,
         active="albums",
         breadcrumbs=[("浏览", "/albums"), (title, "")],
+        # 「新建专辑」在左(由 layout 按 active 自动补), 编辑/修改记录在右
+        title_actions_end=edit_btn,
     )
 
 
@@ -4874,6 +4884,26 @@ def _infobox_widget(album: Mapping[str, Any]) -> str:
     ).format(current=esc(current), help_text=esc(IB.HELP_TEXT))
 
 
+#: 「重复专辑合并」的勾选项(用户 m13899: 合并内容可选, 不再一律全量).
+#: 与 ``dddb.db.MERGE_PARTS`` 同一个键, 改这里就不用改两边 ——
+#: 这个元组只是为了让 templates 不 import db(模板层不该依赖数据库层)。
+_MERGE_PART_OPTIONS: tuple[tuple[str, str], ...] = (
+    ("tracks", "曲目表"),
+    ("credits", "制作人员"),
+    ("urls", "外链"),
+    ("photos", "其他照片"),
+    ("meta", "基本信息（发售日 / 展会 / 社团 / 编号 / 价格 / 会场）"),
+    ("description", "简介"),
+    ("cover", "封面"),
+    ("tags", "艺人 / 风格 / 标签"),
+)
+
+#: 默认勾选: 曲目/制作人员/外链/照片 —— 这几项几乎总是要的;
+#: 封面与基本信息偏"个人判断", 默认不勾, 由编辑者决定。
+_MERGE_DEFAULT: frozenset[str] = frozenset(
+    {"tracks", "credits", "urls", "photos"})
+
+
 def _photos_html(key: Any, ctx: SiteContext,
                  album: Mapping[str, Any]) -> str:
     """「其他照片」区: 与封面分开, 可加备注.
@@ -5200,48 +5230,55 @@ def edit_album_page(
         # 新建模式: 封面随主表单一起提交, 不能走异步上传(还没有 key),
         # 也就不能进裁切弹窗。所以这里给一个**只选图 + 本地预览**的按钮,
         # 选区由 public.js 的 setupCoverPick 接管(不拦截 change)。
+        #
+        # 版面**与编辑页一致**(用户 m13899): 左边大图 / 中间加号格(这里是
+        # "添加其他照片") / 右边说明与上传按钮。以前照片加号孤零零掉在下面
+        # 另一行, 两个页面看起来对不上。
         _cover_inner = (
             '<div class="edit-cover-row">'
             '<div class="edit-cover-thumb">'
             # 没有封面时这里是**加号上传按钮**(用户 m13494: 只显示"新建"两个字
             # 完全不像能点的东西)。整块可点, 由 setupCoverPick 转发到 file input。
+            # 加号用 CSS 画(两条杠), 不用全角「＋」—— 后者受字体影响会偏。
             '<div class="cover cover-fallback edit-cover-img cover-add-thumb"'
             ' data-cover-pick="1" role="button" tabindex="0"'
             ' title="添加封面">'
-            '<span class="cover-plus">＋</span>'
+            '<span class="cover-plus" aria-hidden="true"></span>'
             '<img class="cover-preview-img" alt="" hidden>'
             '</div></div>'
+            # **其他照片**: 与编辑页同一个位置、同一个加号。
+            # 新建时还没有 key, 走不了 /album/<key>/photo, 所以前端先缩成
+            # data URL 塞进隐藏域, 随主表单提交(服务端 _save_new_photos 落盘)。
+            '<div class="cover-slots cover-slots-local" data-photo-local="1">'
+            '<button type="button" class="cover-slot cover-slot-add"'
+            ' data-photo-add="1" title="添加其他照片">＋</button>'
+            '</div>'
             '<div class="cover-form">'
             '<input type="file" name="cover" id="cover-input"'
             ' accept="image/png,image/jpeg,image/webp" class="cover-file">'
+            '<input type="file" id="photo-input" class="cover-file"'
+            ' accept="image/png,image/jpeg,image/webp" multiple>'
             # infobox 里带了图片地址时, 前端把地址放这儿 —— 新建时还没有 key,
             # 没法直接调 /cover-url, 由服务端建完专辑后兜底抓一次。
             '<input type="hidden" name="cover_url_hint" id="cover-url-hint">'
+            # infobox 缓存封面的 token(用户 m13899): 填表时先抓下来缓存,
+            # 提交时由服务端转正; 用户自己传了图则缓存作废。
+            '<input type="hidden" name="cover_cache" id="cover-cache">'
             # 草稿要能记住"选过哪张图"(用户 m12280): file input 的值既存不进
             # localStorage, 也恢复不回来。所以选完图额外把 data URL 放这儿 ——
             # 带 name 是有意的, 它会随表单一起提交, 服务端在没有 cover 文件
             # 时用它兜底落盘。于是刷过页面之后封面不但看得见, 也还提交得上。
             '<input type="hidden" name="cover_data" id="cover-data">'
+            '<input type="hidden" name="photos_data" id="photos-data">'
             '<p class="cover-picked" id="cover-picked"></p>'
             '<button type="button" class="btn-ghost btn-xs cover-upload-btn"'
             ' data-cover-pick="1">上传封面</button>'
             '<p class="field-hint">PNG / JPEG / WebP，≤2MB；'
-            '保存后随专辑一起创建</p>'
+            '保存后随专辑一起创建。「＋」可以再加其他照片（不含封面），'
+            '每张最多 2MB，最多 12 张</p>'
             '</div>'
-            # **其他照片**: 新建时还没有 key, 不能走 /album/<key>/photo,
-            # 所以前端先把每张图缩到 900px 存成 data URL, 塞进隐藏域随表单提交
-            # (服务端 _save_new_photos 建完专辑后逐张落盘)。
-            '<div class="cover-slots cover-slots-local" data-photo-local="1">'
-            '<button type="button" class="cover-slot cover-slot-add"'
-            ' data-photo-add="1" title="添加其他照片">＋</button>'
-            '</div>'
-            '<input type="file" id="photo-input" class="cover-file"'
-            ' accept="image/png,image/jpeg,image/webp" multiple>'
-            '<input type="hidden" name="photos_data" id="photos-data">'
             '<div class="photo-list" data-photo-list="1"></div>'
             '</div>'
-            '<p class="field-hint">「＋」可以再加若干张其他照片（不含封面），'
-            '每张最多 2MB，最多 12 张</p>'
         )
     else:
         _cover_inner = (
@@ -5265,6 +5302,8 @@ def edit_album_page(
             # 抓取封面用: 前端优先直接 POST /cover-url(见 infobox.js),
             # 这个隐藏域是兜底(比如脚本失败时随主表单提交)。
             f'<input type="hidden" name="cover_url_hint" id="cover-url-hint">'
+            # infobox 缓存封面(用户 m13899): 填表时先抓下来缓存, 提交时转正
+            f'<input type="hidden" name="cover_cache" id="cover-cache">'
             f'<input type="file" name="cover" id="cover-input"'
             f' accept="image/png,image/jpeg,image/webp" class="cover-file">'
             f'<p class="cover-picked" id="cover-picked"></p>'
@@ -5518,27 +5557,39 @@ def edit_album_page(
             '<input type="hidden" name="csrf_token" value="{}">'
             '</form>'
         ).format(esc(quote_segment(key)), esc(ctx.csrf_token))
-        # 合并专辑(用户 m13494): 把**这张**并进另一张, 保留目标、删掉本条目。
+        # 「重复专辑合并」(用户 m13899: 按钮改名, 点了弹窗; 合并内容可选)。
         # 与删除一样, 表单必须在主表单之外(HTML 不允许嵌套 form)。
         _merge_btn = (
-            '<!-- 合并: 表单在主表单之外, 用 form 属性关联(理由同删除按钮) -->'
-            '<button type="submit" class="btn-ghost"'
-            ' form="merge-album-form">合并专辑</button>'
+            '<!-- 合并: 按钮打开弹窗, 表单在弹窗里, 仍在主表单之外 -->'
+            '<button type="button" class="btn-ghost"'
+            ' data-merge-open="1">重复专辑合并</button>'
         )
+        _merge_parts = "".join(
+            '<label class="merge-part">'
+            '<input type="checkbox" name="part" value="{}"{}> {}</label>'.format(
+                esc(part_key), " checked" if part_key in _MERGE_DEFAULT else "",
+                esc(part_label))
+            for part_key, part_label in _MERGE_PART_OPTIONS)
         _merge_form = (
-            '<form id="merge-album-form" method="post"'
-            ' action="/album/{}/merge"'
-            ' data-confirm="把当前这张专辑合并到目标专辑？'
-            '合并后当前这张会被删除，且不可恢复。">'
+            '<form id="merge-album-form" class="merge-dialog" method="post"'
+            ' action="/album/{}/merge" hidden>'
             '<input type="hidden" name="csrf_token" value="{}">'
+            '<h3 class="merge-title">重复专辑合并</h3>'
+            '<p class="field-hint">把**当前这张**并进另一张：保留目标，'
+            '当前这张会被删除。只合并下面勾选的内容。</p>'
             '<label class="field-label" for="merge-target">合并到</label>'
             '<input class="input" type="text" id="merge-target" name="target"'
             ' placeholder="目标专辑的编号或 /album/... 地址">'
             '<p class="field-hint">填目标专辑的编号（如 circle|title|2026），'
-            '也可以直接粘它的 /album/… 地址。当前这张的曲目 / 制作人员 / '
-            '外链 / 附图会并进目标。</p>'
+            '也可以直接粘它的 /album/… 地址。</p>'
+            '<div class="merge-parts">{}</div>'
+            '<div class="merge-actions">'
+            '<button type="submit" class="btn-danger">合并</button>'
+            '<button type="button" class="btn-ghost" data-merge-close="1">'
+            '取消</button>'
+            '</div>'
             '</form>'
-        ).format(esc(quote_segment(key)), esc(ctx.csrf_token))
+        ).format(esc(quote_segment(key)), esc(ctx.csrf_token), _merge_parts)
 
     if creating:
         _intro = ('<p class="section-note">新建专辑: 填好后点保存, '
@@ -5574,7 +5625,7 @@ def edit_album_page(
       {tracks_add_disc_html}
       </div>
     </section>
-    <div class="field-actions edit-actions">
+    <div class="field-actions edit-actions edit-actions-end">
       <button type="submit">{i18n.translate("btn.save", ctx.lang)}</button>
       <a class="btn-ghost" href="{esc(_cancel_href)}">{i18n.translate("btn.cancel", ctx.lang)}</a>
       {_merge_btn}
