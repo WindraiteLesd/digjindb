@@ -75,13 +75,18 @@ class TestTextRemoved(unittest.TestCase):
 
     def test_no_photo_head_text(self) -> None:
         html = self._html([{"url": "/p/1.jpg", "note": "x"}])
-        for text in ("其他照片", "不参与封面", "可加备注"):
+        # 「其他照片」现在只作为加号的 title / 合并选项文字出现,
+        # 不再是一段标题文案 —— 用户要求把它做成加号入口。
+        for text in ("不参与封面", "可加备注"):
             self.assertNotIn(text, html, f"还有文案 {text}")
+        self.assertNotIn("<h3>其他照片</h3>", html)
+        self.assertNotIn('class="photo-head"', html)
 
-    def test_no_add_photo_button(self) -> None:
+    def test_add_photo_is_plus_button(self) -> None:
+        """附图入口: 用户要求做成加号按钮, 不再是一行文字按钮。"""
         html = self._html([{"url": "/p/1.jpg", "note": "x"}])
+        self.assertIn('data-cover-add="1"', html)
         self.assertNotIn("＋ 添加照片", html)
-        self.assertNotIn("data-photo-add", html)
 
     def test_no_crop_hint(self) -> None:
         html = self._html()
