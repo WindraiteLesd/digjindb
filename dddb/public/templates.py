@@ -376,6 +376,7 @@ def _nav(active: str, *, lang: str = "zh", is_editor: bool = False,
     if is_superuser:
         items.append(("review", "/review", "审核队列"))
         items.append(("users_admin", "/users", "用户管理"))
+        items.append(("dashboard", "/dashboard", "数据看板"))
     items.append(("about", "/about", i18n.translate("nav.about", lang)))
     if not is_editor:
         # 「工作队列」是编辑工具: 普通用户/访客连入口都不该看到
@@ -564,13 +565,13 @@ def layout(
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
 <title>{esc(title)} · {esc(ctx.site_name)}</title>
-<link rel="stylesheet" href="/static/public.css?v=79">
+<link rel="stylesheet" href="/static/public.css?v=81">
 <!-- ?v=2: 图标换过, 但静态资源被 CF/浏览器缓存 1 天, 加版本号强制刷新 -->
 <link rel="icon" href="/static/favicon.svg?v=2" type="image/svg+xml">
 <!-- 唯一的脚本: 同源外链, 只做渐进增强(CSP 只给 script-src 'self') -->
-<script src="/static/public.js?v=67" defer></script>
+<script src="/static/public.js?v=68" defer></script>
 <script src="/static/cover-crop.js?v=6" defer></script>
-<script src="/static/infobox.js?v=9" defer></script>
+<script src="/static/infobox.js?v=10" defer></script>
 </head>
 <body{_bg_attr(ctx)}>
 <a class="skip" href="#content">跳到正文</a>
@@ -1346,6 +1347,7 @@ def album_detail_page(
     entities_more_names: str = "",
     comment_likes: Mapping[Any, int] | None = None,
     liked_ids: Sequence[Any] = (),
+    favorite: bool = False,
 ) -> str:
     """专辑详情.
 
@@ -1742,6 +1744,23 @@ def album_detail_page(
             f'<a class="btn-ghost btn-xs" href="{esc(edit_href)}">编辑这张专辑</a>'
             f'<a class="btn-ghost btn-xs" href="{esc(history_href)}">修改记录</a>'
         )
+    # 收藏专辑(用户 m14663): 登录用户一键收藏, 和关注社团同一族 POST 端点。
+    # 未登录给登录入口 —— 收藏要落在具体账号上, 匿名收藏没有意义。
+    _fav_next = "/album/" + quote_segment(str(album.get("key") or ""))
+    if ctx.user:
+        favorite_btn = (
+            '<form class="album-favorite" method="post" action="/favorites/toggle">'
+            f'<input type="hidden" name="csrf_token" value="{esc(ctx.csrf_token)}">'
+            f'<input type="hidden" name="album_key" value="{esc(str(album.get("key") or ""))}">'
+            f'<input type="hidden" name="next" value="{esc(_fav_next)}">'
+            f'<button type="submit" class="btn-ghost btn-xs'
+            f'{" is-on" if favorite else ""}">'
+            f'{"已收藏" if favorite else "收藏专辑"}</button>'
+            "</form>"
+        )
+    else:
+        favorite_btn = '<a class="btn-ghost btn-xs" href="/login">登录后可收藏</a>'
+    edit_btn = favorite_btn + edit_btn
 
     # 详情页区块顺序(用户要求):
     #   ① 社团(紧跟标题) ② 艺人/社团 + 制作人员(合并) ③ 简介 ④ 曲目表(可折叠) ⑤ 外链
@@ -3840,6 +3859,21 @@ def account_page(
     return layout(ctx, title="我的账号", body=body, active="account")
 
 
+def _follow_href(kind: str, key: str) -> str:
+    """关注项该链到哪里. 与 ``PublicSite._enrich_follows`` 同一套规则."""
+    if not key:
+        return ""
+    if kind == "circle":
+        return "/circle/" + quote_segment(key)
+    if kind == "artist":
+        return "/artist/" + quote_segment(key)
+    if kind == "event":
+        return "/event/" + quote_segment(key)
+    if kind == "user":
+        return "/u/" + quote_segment(key) + "/"
+    return ""
+
+
 def public_profile_page(
     ctx: SiteContext,
     *,
@@ -3938,36 +3972,52 @@ def public_profile_page(
     if allowed("vis_follows") and follows:
         kinds = {"circle": "社团", "artist": "艺人", "event": "展会",
                  "user": "用户"}
-        rows = []
+        cards = []
         for item in follows:
             kind = str(item.get("kind") or "")
             key = str(item.get("key") or "")
             label = kinds.get(kind, kind)
-            # 社团/艺人能给站内链接就给
-            if kind == "circle" and key:
-                href = f"/circle/{quote_segment(key)}"
-                rows.append(f'<li><span class="muted">{esc(label)}</span> '
-                            f'<a href="{esc(href)}">{esc(key)}</a></li>')
-            elif kind == "artist" and key:
-                href = "/albums?q=" + quote_segment(key)
-                rows.append(f'<li><span class="muted">{esc(label)}</span> '
-                            f'<a href="{esc(href)}">{esc(key)}</a></li>')
+            # href 由 PublicSite._enrich_follows 补齐, 但模板自己也要能兜住 ——
+            # 直接渲染模板(比如测试)时没有那层, 不给兜底就只能显示成纯文本。
+            href = safe_url(item.get("href") or "") or _follow_href(kind, key)
+            image = safe_url(item.get("image") or "")
+            # 头像(用户 m14663): 社团徽标 / 艺人头像, 没有就退回首字占位块
+            if image:
+                thumb = (f'<img class="follow-card-avatar" src="{esc(image)}"'
+                         f' alt="{esc(key)}" loading="lazy" decoding="async"'
+                         f' referrerpolicy="no-referrer">')
             else:
-                rows.append(f'<li><span class="muted">{esc(label)}</span> '
-                            f'{esc(key)}</li>')
+                thumb = (f'<span class="follow-card-avatar follow-card-avatar-text"'
+                         f' aria-hidden="true">{esc((key or "?")[:1])}</span>')
+            body = (f'{thumb}<span class="follow-card-body">'
+                    f'<span class="follow-card-kind">{esc(label)}</span>'
+                    f'<span class="follow-card-name">{esc(key)}</span></span>')
+            if href:
+                cards.append(f'<a class="follow-card" href="{esc(href)}">{body}</a>')
+            else:
+                cards.append(f'<span class="follow-card">{body}</span>')
         parts.append(
             '<section class="panel"><h2 class="section-title">关注</h2>'
-            f'<ul class="plain-list">{"".join(rows)}</ul></section>')
+            f'<div class="follow-grid">{"".join(cards)}</div></section>')
 
     if allowed("vis_contributions") and contributions:
-        rows = "".join(
-            f'<li><span class="muted">{esc(item.get("created_at_text") or "")}</span> '
-            f'[{esc(item.get("kind") or "")}] '
-            f'{esc(item.get("summary") or item.get("target") or "")}</li>'
-            for item in contributions)
+        rows = []
+        for item in contributions:
+            extra = ""
+            try:
+                count = int(item.get("count") or 1)
+            except (TypeError, ValueError):
+                count = 1
+            if count > 1:
+                extra = f' <span class="contrib-count">×{count}</span>'
+            target = str(item.get("target") or "")
+            summary = str(item.get("summary") or target)
+            rows.append(
+                f'<li><span class="muted">{esc(item.get("created_at_text") or "")}</span> '
+                f'[{esc(item.get("kind") or "")}] {esc(summary)}{extra}</li>')
         parts.append(
             '<section class="panel"><h2 class="section-title">贡献</h2>'
-            f'<ul class="plain-list">{rows}</ul></section>')
+            f'<ul class="plain-list">{"".join(rows)}</ul></section>')
 
     # 只有头部 + 无其它内容时给个提示(头部永远有统计, 所以不判断 parts[1:])
     if len(parts) <= 1:
@@ -4490,6 +4540,178 @@ def users_admin_page(
           "禁用会把对方踢下线并且无法再登录。</p>"
     )
     return layout(ctx, title="用户管理", body=body, active="users_admin")
+
+
+# --------------------------------------------------------------------------
+# 站务: 数据看板(访问记录 / 编辑改动 / 服务器负载)
+# --------------------------------------------------------------------------
+
+def _bar_row(label: str, count: int, top: int, *, cls: str = "") -> str:
+    """看板里的一行"进度条": 名字 + 条 + 数字."""
+    width = 0.0 if top <= 0 else min(100.0, 100.0 * count / top)
+    return (
+        f'<li class="dash-bar{(" " + cls) if cls else ""}">'
+        f'<span class="dash-bar-label" title="{esc(label)}">{esc(label)}</span>'
+        f'<span class="dash-bar-track">'
+        f'<span class="dash-bar-fill" style="width:{width:.1f}%"></span></span>'
+        f'<span class="dash-bar-count">{esc(count)}</span></li>'
+    )
+
+
+def _gauge(label: str, percent: float, detail: str) -> str:
+    """一个百分比圆条(CPU / 内存 / 硬盘共用)."""
+    try:
+        value = float(percent or 0)
+    except (TypeError, ValueError):
+        value = 0.0
+    unknown = value < 0
+    shown = 0.0 if unknown else max(0.0, min(100.0, value))
+    level = "is-high" if shown >= 85 else ("is-mid" if shown >= 60 else "")
+    text = "—" if unknown else f"{shown:.0f}%"
+    return (
+        f'<div class="dash-gauge {level}">'
+        f'<span class="dash-gauge-track">'
+        f'<span class="dash-gauge-fill" style="width:{shown:.1f}%"></span></span>'
+        f'<span class="dash-gauge-text"><b>{esc(text)}</b>'
+        f'<span class="dash-gauge-label">{esc(label)}</span></span>'
+        f'<span class="dash-gauge-detail">{esc(detail)}</span>'
+        "</div>"
+    )
+
+
+def dashboard_page(ctx: SiteContext, *, data: Mapping[str, Any]) -> str:
+    """站务数据看板(仅超级用户, 用户 m14663).
+
+    三块: 访问统计 + 最近访问/热门页面, 最近编辑改动, 服务器负载。
+    """
+    enabled = bool(data.get("enabled"))
+    totals = data.get("totals") or {}
+    server = data.get("server") or {}
+    memory = server.get("memory") or {}
+    disk = server.get("disk") or {}
+    load = server.get("load") or {}
+
+    # ---- 顶部数字 ----
+    cards = [
+        ("近 24 小时访问", totals.get("views", 0), "次请求"),
+        ("独立访客", totals.get("visitors", 0), "个 IP"),
+        ("登录用户", totals.get("members", 0), "人"),
+        ("累计访问", totals.get("total", 0), "条记录"),
+    ]
+    tiles = "".join(
+        f'<div class="dash-tile"><span class="dash-tile-value">{esc(value)}</span>'
+        f'<span class="dash-tile-label">{esc(label)}</span>'
+        f'<span class="dash-tile-hint">{esc(hint)}</span></div>'
+        for label, value, hint in cards
+    )
+
+    # ---- 热门路由 / 路径 ----
+    routes = list(data.get("routes") or [])
+    top_routes = int(routes[0]["count"]) if routes else 0
+    routes_html = "".join(
+        _bar_row(str(item.get("route") or ""), int(item.get("count") or 0), top_routes)
+        for item in routes
+    ) or '<li class="dash-empty">最近没有访问记录</li>'
+    paths = list(data.get("paths") or [])
+    top_paths = int(paths[0]["count"]) if paths else 0
+    paths_html = "".join(
+        _bar_row(str(item.get("path") or "/"), int(item.get("count") or 0), top_paths)
+        for item in paths
+    ) or '<li class="dash-empty">最近没有访问记录</li>'
+
+    # ---- 最近访问 ----
+    recent = list(data.get("recent") or [])
+    recent_rows: list[str] = []
+    for item in recent[:60]:
+        who = str(item.get("username") or "")
+        if who:
+            who_html = (f'<a class="dash-who" href="/u/{quote_segment(who)}/">'
+                        f"{esc(who)}</a>")
+        else:
+            who_html = '<span class="dash-who is-anon">访客</span>'
+        path = str(item.get("path") or "/")
+        recent_rows.append(
+            '<li class="dash-visit">'
+            f'<span class="dash-visit-time">{esc(_dash_stamp(item.get("at")))}</span>'
+            f"{who_html}"
+            f'<span class="dash-visit-path" title="{esc(item.get("ua") or "")}">'
+            f"{esc(path)}</span>"
+            f'<span class="dash-visit-ip">{esc(item.get("client_ip") or "")}</span>'
+            "</li>"
+        )
+    recent_html = ("".join(recent_rows)
+                   if recent_rows else '<li class="dash-empty">还没有访问记录</li>')
+
+    # ---- 最近改动 ----
+    revisions = list(data.get("revisions") or [])
+    rev_rows: list[str] = []
+    for item in revisions[:40]:
+        key = str(item.get("album_key") or "")
+        who = str(item.get("username") or "")
+        rev_rows.append(
+            '<li class="dash-edit">'
+            f'<span class="dash-edit-time">{esc(_dash_stamp(item.get("created_at")))}</span>'
+            f'<a class="dash-edit-who" href="/u/{quote_segment(who)}/">{esc(who or "?")}</a>'
+            f'<a class="dash-edit-target" href="/album/{quote_segment(key)}">'
+            f"{esc(key)}</a>"
+            f'<span class="dash-edit-summary">{esc(item.get("summary") or "")}</span>'
+            "</li>"
+        )
+    rev_html = ("".join(rev_rows)
+                if rev_rows else '<li class="dash-empty">还没有改动记录</li>')
+
+    # ---- 服务器 ----
+    mem_total = float(memory.get("total_mb") or 0)
+    mem_used = float(memory.get("used_mb") or 0)
+    mem_detail = (f"{mem_used:.0f} / {mem_total:.0f} MB" if mem_total else "读不到")
+    disk_total = float(disk.get("total_gb") or 0)
+    disk_detail = (f"{float(disk.get('used_gb') or 0):.1f} / {disk_total:.1f} GB"
+                   if disk_total else "读不到")
+    load_one = float(load.get("one") or -1)
+    load_text = "—" if load_one < 0 else "{:.2f} / {:.2f} / {:.2f}".format(
+        load_one, float(load.get("five") or 0), float(load.get("fifteen") or 0))
+    gauges = (
+        _gauge("CPU", float(server.get("cpu_percent") or -1), "最近 0.12 秒")
+        + _gauge("内存", float(memory.get("percent") or 0), mem_detail)
+        + _gauge("硬盘", float(disk.get("percent") or 0), disk_detail)
+    )
+    uptime = str(server.get("uptime") or "") or "—"
+
+    warn = ""
+    if not enabled:
+        warn = _notice_html(
+            "", "访问日志库还没建好(或目录不可写), 下面的访问统计暂时是空的。")
+
+    body = (
+        warn
+        + f'<div class="dash-tiles">{tiles}</div>'
+        + '<div class="dash-grid">'
+        + '<section class="dash-card"><h3 class="dash-title">服务器负载</h3>'
+        + gauges
+        + f'<p class="dash-meta">负载 {esc(load_text)} · 已运行 {esc(uptime)}</p>'
+        + "</section>"
+        + '<section class="dash-card"><h3 class="dash-title">热门页面</h3>'
+        + f'<ul class="dash-bars">{routes_html}</ul></section>'
+        + '<section class="dash-card"><h3 class="dash-title">热门路径</h3>'
+        + f'<ul class="dash-bars">{paths_html}</ul></section>'
+        + "</div>"
+        + '<section class="dash-card"><h3 class="dash-title">最近访问</h3>'
+        + f'<ul class="dash-visits">{recent_html}</ul></section>'
+        + '<section class="dash-card"><h3 class="dash-title">最近改动</h3>'
+        + f'<ul class="dash-edits">{rev_html}</ul></section>'
+        + '<p class="section-note">访问记录保留 30 天, 图片与静态资源不计入; '
+          "编辑改动来自每张专辑的修改快照。</p>"
+    )
+    return layout(ctx, title="数据看板", body=body, active="dashboard",
+                  subtitle="本站访问、编辑改动与服务器负载。")
+
+
+def _dash_stamp(value: Any) -> str:
+    """看板里的短时间: ``10-24 15:03``."""
+    from .data import human_time
+
+    text = human_time(value, "zh")
+    return text[5:] if len(text) > 16 else text
 
 
 # --------------------------------------------------------------------------
@@ -5092,6 +5314,41 @@ def edit_album_page(
         "</div>"
         "</details>"
     )
+    # 制作人员「整段粘贴」区(用户 m14663): 与曲目粘贴同款思路 ——
+    # 输入框就是表单的一个普通字段(name="credit_paste"), 服务端用
+    # dddb/creditparse.py 解析「职责: 名字」后并进词条; 括号里的链接会被丢掉。
+    credit_paste_text = str(values.get("credit_paste") or "")
+    credit_mode = str(values.get("credit_mode") or "replace")
+    if credit_mode not in ("replace", "append"):
+        credit_mode = "replace"
+    credit_replace_checked = " checked" if credit_mode == "replace" else ""
+    credit_append_checked = " checked" if credit_mode == "append" else ""
+    credit_paste_html = (
+        '<details class="trk-paste credit-paste"'
+        + (" open" if credit_paste_text else "") + ">"
+        "<summary>从别处整段粘贴制作人员(自动识别 职责 / 名字)</summary>"
+        '<div class="trk-paste-body">'
+        '<label class="field auth-field"><span>粘贴内容'
+        '<span class="field-hint">每行一条「职责: 名字」; '
+        "括号里的链接会被忽略, 多个名字用、或 / 分隔</span></span>"
+        '<textarea name="credit_paste" rows="6" spellcheck="false" '
+        'placeholder="制作: 甲&#10;作曲: 甲 / 乙&#10;插画: 丙 (https://example.com/p)">'
+        f"{esc(credit_paste_text)}</textarea>"
+        "</label>"
+        '<div class="trk-paste-modes">'
+        f'<label class="trk-mode"><input type="radio" name="credit_mode" value="replace"{credit_replace_checked}>'
+        " 替换现有词条</label>"
+        f'<label class="trk-mode"><input type="radio" name="credit_mode" value="append"{credit_append_checked}>'
+        " 追加到末尾</label>"
+        "</div>"
+        '<div class="trk-paste-acts">'
+        '<button type="submit" class="btn" data-credit-apply="1">保存并填入词条</button>'
+        '<span class="trk-paste-hint muted">会连同其它字段一起保存; '
+        "没识别出词条时现有词条保持原样。</span>"
+        "</div>"
+        "</div>"
+        "</details>"
+    )
     # **不补空行**: 有曲目就按实际数量渲染(以前 rows_for(...,3) 会补到 3 行,
     # 2 首曲目会多出 3 个空行, 用户看到"大量空行")。空碟才给 1 行占位。
     _track_values = list(values.get("tracks") or [])
@@ -5525,6 +5782,9 @@ def edit_album_page(
         + '<div class="people-suggest-list" hidden>'
         + _artist_options + "</div>"
         + '<h3 class="edit-sub-title">词条</h3>'
+        # 制作人员「整段粘贴」区(用户 m14663): 与曲目粘贴同款,
+        # 输入框是表单普通字段 credit_paste, 提交时由 dddb/creditparse.py 解析。
+        + credit_paste_html
         + '<div class="rows">' + _credit_rows + "</div>"
         + credits_add_html,
         "制作人员",
@@ -5532,7 +5792,10 @@ def edit_album_page(
     )
     _cards["links"] = _card(
         "links",
-        f'<div class="rows">{urls_html}</div>{_link_datalist}{urls_add_html}',
+        # datalist 必须放在 .rows **之前**: 「＋ 添加外链」的新行是插到
+        # .pair-add 的前一个兄弟里, datalist 夹在中间时新行会被 appendChild
+        # 进 <datalist>(浏览器不渲染), 看起来就是按钮完全失效(用户 m14663)。
+        f'{_link_datalist}<div class="rows">{urls_html}</div>{urls_add_html}',
         i18n.translate("section.links", ctx.lang),
         "edit-card-links",
     )
