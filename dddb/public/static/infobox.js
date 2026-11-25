@@ -243,28 +243,33 @@
 
   function ibMsg() { return $("[data-infobox-msg]"); }
 
-  // 把 infobox 里的 cover 地址真的存成封面.
-  //   编辑模式: 有专辑 key, 直接 POST /album/<key>/cover-url 让服务端抓;
-  //   新建模式: 还没有 key, 只能把地址塞进隐藏域, 保存时由服务端兜底抓。
-  // 返回 true 表示"这一项确实被处理了"(用于"已填入"提示)。
+  // infobox 里的 cover 地址 -> **先缓存到服务端, 提交时再转正**(用户 m13899).
+  //
+  // 为什么不再"填表就写库": 编辑者可能只是粘一段 infobox 试试, 或者发现这张
+  // 图不够清楚要换 —— 直接写库就没有退路了。现在分两步:
+  //   ① 这里 POST /cover-cache/new, 服务端抓图存进 covers/pending/<token>,
+  //      页面立刻用 /cover-cache/<token> 预览, token 写进隐藏域 cover_cache;
+  //   ② 提交表单时服务端 _apply_pending_cover() 把它转成正式封面;
+  //      若用户自己传了图, 缓存直接作废(以用户提交的为准)。
+  // 返回 true 表示这一项确实被处理了(用于"已填入"提示)。
   function applyCover(url) {
     var box = ibMsg();
     var hint = document.querySelector('[name="cover_url_hint"]');
     if (hint) { hint.value = url || ""; }
-    var form = document.getElementById("cover-form");
-    var action = form && form.getAttribute("data-cover-action");
-    var token = form && form.getAttribute("data-cover-token");
-    if (!action || !token) {
-      // 新建页: 地址留在隐藏域, 保存时服务端抓
+    var cacheField = document.getElementById("cover-cache");
+    var form = document.querySelector("form.edit-form");
+    var token = form && form.querySelector('input[name="csrf_token"]');
+    token = token && token.value;
+    if (!cacheField || !token) {
+      // 极端情况(没有编辑表单/没有 CSRF): 退回旧的兜底路径, 保存时由服务端抓
       if (box) { box.textContent = "封面会在保存时自动抓取"; }
       return true;
     }
-    var target = action.replace(/\/cover$/, "/cover-url");
     var body = new URLSearchParams();
     body.set("csrf_token", token);
     body.set("url", url);
-    if (box) { box.textContent = "正在抓取封面…"; }
-    fetch(target, {
+    if (box) { box.textContent = "正在缓存封面…"; }
+    fetch("/cover-cache/new", {
       method: "POST",
       body: body,
       credentials: "same-origin",
@@ -274,15 +279,28 @@
         return { ok: false, error: "HTTP " + r.status };
       });
     }).then(function (data) {
-      if (data && data.ok) {
-        var img = document.querySelector(".edit-cover-thumb img, .edit-cover-img img");
+      if (data && data.ok && data.token) {
+        cacheField.value = data.token;
+        // 让草稿与"脏"标记都能看到这个变化
+        cacheField.dispatchEvent(new Event("input", { bubbles: true }));
+        cacheField.dispatchEvent(new Event("change", { bubbles: true }));
+        var img = document.querySelector(".edit-cover-img img, .edit-cover-thumb img");
         if (img) {
-          var base = img.getAttribute("src") || "";
-          img.setAttribute("src", base.split("?")[0] + "?t=" + Date.now());
+          img.setAttribute("src", data.url);
           img.hidden = false;
         }
-        var fallback = document.querySelector(".edit-cover-thumb .cover-fallback span");
+        var plus = document.querySelector(".cover-add-thumb .cover-plus");
+        if (plus) { plus.style.display = "none"; }
+        var fallback = document.querySelector(".cover-fallback span");
         if (fallback) { fallback.style.display = "none"; }
+        if (box) {
+          var size = (data.width && data.height)
+            ? "（" + data.width + "×" + data.height + "）" : "";
+          box.textContent = data.small
+            ? "封面已缓存" + size + "，但原图偏小；不满意可以直接换一张，"
+              + "换成你上传的那张后缓存的这张会被丢掉"
+            : "封面已缓存" + size + "，点保存才会真正存下来";
+        }
       } else if (box) {
         box.textContent = "封面抓取失败: " + ((data && data.error) || "未知原因");
       }
