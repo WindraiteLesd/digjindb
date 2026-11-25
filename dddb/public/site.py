@@ -36,6 +36,7 @@ import math
 import mimetypes
 import os
 import re
+import secrets
 import socket
 import sqlite3
 import struct
@@ -74,6 +75,7 @@ from .data import (
     parse_filters,
 )
 from .ratelimit import RateLimiter, classify_request, client_ip_from_headers
+from ..imageutil import probe_image_size
 from ..trackparse import parse_tracklist
 from .users import (
     LOGIN_INACTIVE,
@@ -126,6 +128,12 @@ MAX_BODY = 8 * 1024 * 1024
 MAX_IMAGE_BODY = 2 * 1024 * 1024
 #: 新建专辑时随表单带上的「其他照片」最多几张(防止一个请求塞一张相册)
 MAX_NEW_PHOTOS = 12
+
+#: infobox 里带的封面先"缓存"到服务端(不写库), 提交时再转正。
+#: 超过这个时间的缓存图会被下一次缓存/提交顺手清掉。
+PENDING_COVER_TTL = 24 * 3600
+#: 缓存图最长边小于它 -> 前端提示"原图偏小, 建议替换"
+PENDING_COVER_SMALL = 500
 
 #: 表单里重复行(词条/外链/曲目)的上限
 MAX_ROWS = 300
@@ -387,6 +395,9 @@ _ROUTE_MAP = {
     "event-logo": "event_logo",
     # 艺人头像 / 社团徽标(新建条目时 _save_new_image 写盘, 这里读回来)
     "logo": "logo",
+    # infobox 封面: 先把远程图缓存到服务端(不写库), 提交时再转正。
+    # POST /cover-cache/new 建缓存, GET /cover-cache/<token> 取图。
+    "cover-cache": "pending_cover",
     # 展会**系列**: 详情页与图片
     # event-series 用**基础名** event_series: 下面的分支再细分
     # /<name> /<name>/edit /new, 直接把 name 设成最终路由会让 /edit 失效
@@ -424,7 +435,8 @@ _ROUTE_MAP = {
 #: 这些路由名必须有第二个路径段, 否则视为 index(或 404)
 _ENTITY_ROUTES = frozenset({"album", "circle", "event", "tag", "cover", "static",
                               "event-date", "embed", "event_logo", "event_series_page",
-                              "event_series_logo", "event_series_poster", "logo"})
+                              "event_series_logo", "event_series_poster", "logo",
+                              "pending_cover"})
 
 #: 索引页路由名 -> 实体路由名(``/circle/<x>`` 缺失时退化为 ``/circles``)
 _INDEX_OF = {"album": "albums", "circle": "circles", "event": "events", "tag": "tags"}
@@ -2157,6 +2169,8 @@ class PublicSite:
             return self.serve_event_logo(arg)
         if name == "logo":
             return self.serve_logo_image(arg)
+        if name == "pending_cover":
+            return self.serve_pending_cover(arg)
         if name == "event_series_page":
             return Response.html(self.page_event_series(
                 str(arg or ""), params or {}, state))
@@ -2616,6 +2630,8 @@ class PublicSite:
             return self._do_album_delete(arg, values, state, cookies)
         if name == "album_merge":
             return self._do_album_merge(arg, values, state, cookies)
+        if name == "pending_cover":
+            return self._do_pending_cover(arg, values, state, cookies)
 
         if name == "comment_like":
             return self._do_comment_like(text_field(values, "comment_id"), values, state, cookies)
@@ -2665,7 +2681,8 @@ class PublicSite:
             if _ctype.lower().startswith("multipart/form-data") and body:
                 values = {**dict(values),
                           **self._values_from_multipart(headers, body)}
-            return self._do_album_edit(arg, values, state, cookies)
+            return self._do_album_edit(arg, values, state, cookies,
+                                       headers=headers, body=body)
         if name == "account":
             return self._do_account(values, state, cookies)
         if name == "verify_email":
@@ -3801,6 +3818,173 @@ class PublicSite:
             state.session.flash = "专辑已删除"
         return Response.redirect("/albums", status=303)
 
+    # ------------------------------------------------------------------
+    # infobox 封面: 先缓存, 提交时转正(用户 m13899)
+    # ------------------------------------------------------------------
+    def _pending_cover_dir(self) -> Path | None:
+        """缓存目录 ``<covers>/pending``. 拿不到封面目录时返回 None."""
+        covers = getattr(self.data, "covers_dir", None)
+        if covers:
+            base = Path(covers)
+        elif self.db_path is not None:
+            base = Path(self.db_path).parent / "covers"
+        else:
+            return None
+        return base / "pending"
+
+    def _purge_pending_covers(self, folder: Path) -> None:
+        """顺手清掉过期的缓存图(不单独起定时任务)."""
+        try:
+            now = time.time()
+            for path in folder.iterdir():
+                if not path.is_file():
+                    continue
+                try:
+                    if now - path.stat().st_mtime > PENDING_COVER_TTL:
+                        path.unlink()
+                except OSError:
+                    continue
+        except OSError:
+            return
+
+    def _pending_cover_path(self, token: str) -> Path | None:
+        """token -> 缓存文件路径(只认 16 位十六进制, 杜绝路径穿越)."""
+        clean = str(token or "").strip().lower()
+        if not re.fullmatch(r"[0-9a-f]{16}", clean):
+            return None
+        folder = self._pending_cover_dir()
+        if folder is None:
+            return None
+        for suffix in (".png", ".jpg", ".webp"):
+            path = folder / (clean + suffix)
+            if path.is_file():
+                return path
+        return None
+
+    def _drop_pending_cover(self, values: Mapping[str, Any]) -> None:
+        """把这次提交对应的缓存图删掉(用户已经自己传了图)."""
+        token = text_field(values, "cover_cache").strip()
+        path = self._pending_cover_path(token) if token else None
+        if path is not None:
+            try:
+                path.unlink()
+            except OSError:
+                pass
+
+    def _promote_cached_cover(self, key: str, values: Mapping[str, Any]) -> bool:
+        """提交时把缓存的封面转成这张专辑的正式封面."""
+        token = text_field(values, "cover_cache").strip()
+        path = self._pending_cover_path(token) if token else None
+        if path is None:
+            return False
+        try:
+            blob = path.read_bytes()
+        except OSError:
+            return False
+        if not blob:
+            return False
+        mime = sniff_image_type(blob) or "image/png"
+        ext = {"image/png": ".png", "image/jpeg": ".jpg",
+               "image/webp": ".webp"}.get(mime, "")
+        if not ext:
+            return False
+        ok, _note = self._store_cover_bytes(str(key), blob, mime, ext)
+        if ok:
+            try:
+                path.unlink()
+            except OSError:
+                pass
+        return ok
+
+    def _apply_pending_cover(self, key: str, values: Mapping[str, Any],
+                             headers: Mapping[str, Any] | None,
+                             body: bytes) -> bool:
+        """提交表单时处理 infobox 缓存图(用户 m13899).
+
+        * 用户这次**自己传了**封面文件 -> 缓存作废(删文件, 改成保存用户提交的);
+        * 用户没传 -> 把缓存转成正式封面。
+        返回是否真的写入了封面。
+        """
+        if not text_field(values, "cover_cache").strip():
+            return False
+        if headers is not None and body and parse_upload(headers, body, "cover") is not None:
+            self._drop_pending_cover(values)
+            return False
+        return self._promote_cached_cover(key, values)
+
+    def serve_pending_cover(self, token: str) -> Response:
+        """``GET /cover-cache/<token>``: 只给编辑页预览用, 不缓存(no-store)."""
+        path = self._pending_cover_path(token)
+        if path is None:
+            return self._plain_404()
+        try:
+            blob = path.read_bytes()
+        except OSError:
+            return self._plain_404()
+        if not blob:
+            return self._plain_404()
+        ctype = sniff_image_type(blob) or "image/png"
+        resp = Response.binary(blob, ctype, status=200)
+        # 缓存图随时会被删/替换, 绝不能让浏览器长期留着
+        resp.headers["Cache-Control"] = "no-store"
+        return resp
+
+    def _do_pending_cover(self, arg: str, values: Mapping[str, Any],
+                          state: auth.AuthState, cookies: list[str]) -> Response:
+        """``POST /cover-cache/new``: 把 infobox 里的封面地址抓下来缓存.
+
+        为什么不在填表时就写库(用户 m13899): 编辑者可能只是粘了一段 infobox
+        试试, 也可能觉得这张图不够清楚要换 —— 那就得留个"撤销"的余地。
+        所以这里只落到 ``covers/pending/<token>.<ext>``, 页面立刻能预览,
+        **真正的封面等提交表单时才由 :meth:`_promote_cached_cover` 写入**。
+        """
+        if not self.can_edit(state):
+            return self._json({"ok": False, "error": "只有编辑者可以抓取封面"},
+                              status=403, cookies=cookies)
+        if str(arg or "").strip().lower() != "new":
+            return self._json({"ok": False, "error": "未知操作"},
+                              status=404, cookies=cookies)
+        folder = self._pending_cover_dir()
+        if folder is None:
+            return self._json({"ok": False, "error": "本站没有可写的图片目录"},
+                              status=503, cookies=cookies)
+        url = text_field(values, "url").strip()
+        if not url:
+            return self._json({"ok": False, "error": "没有收到图片地址"},
+                              status=400, cookies=cookies)
+        try:
+            blob, mime = fetch_image_from_url(url)
+        except CoverFetchError as exc:
+            return self._json({"ok": False, "error": str(exc)},
+                              status=400, cookies=cookies)
+        sniffed = sniff_image_type(blob) or ""
+        if sniffed:
+            mime = sniffed
+        ext = {"image/png": ".png", "image/jpeg": ".jpg",
+               "image/webp": ".webp"}.get(str(mime or ""), "")
+        if not ext:
+            return self._json({"ok": False, "error": "对方返回的不是 PNG/JPEG/WebP"},
+                              status=400, cookies=cookies)
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            return self._json({"ok": False, "error": "缓存目录不可写"},
+                              status=503, cookies=cookies)
+        self._purge_pending_covers(folder)
+        token = secrets.token_hex(8)
+        try:
+            (folder / (token + ext)).write_bytes(blob)
+        except OSError:
+            return self._json({"ok": False, "error": "写缓存文件失败"},
+                              status=503, cookies=cookies)
+        size = probe_image_size(blob)
+        width, height = (int(size[0]), int(size[1])) if size else (0, 0)
+        small = bool(width and height and max(width, height) < PENDING_COVER_SMALL)
+        return self._json({
+            "ok": True, "token": token, "url": "/cover-cache/" + token,
+            "width": width, "height": height, "small": small,
+        }, cookies=cookies)
+
     def _do_album_merge(self, key: str, values: Mapping[str, Any],
                         state: auth.AuthState, cookies: list[str]) -> Response:
         """把这张专辑并进另一张(仅编辑者).
@@ -3821,6 +4005,15 @@ class PublicSite:
                               status=503, cookies=cookies)
         raw = text_field(values, "target").strip()
         target = self._album_key_from_input(raw)
+        # 只合并用户勾选的部分(用户 m13899); 一个都没勾时按"什么都没选"处理,
+        # 而不是偷偷全量合并。
+        parts = [str(one).strip() for one in many_fields(values, "part")]
+        parts = [one for one in parts if one]
+        if not parts:
+            if state.session is not None:
+                state.session.flash = "请至少勾选一项要合并的内容"
+            return Response.redirect(
+                "/album/" + T.quote_segment(key) + "/edit", status=303)
         if not target:
             if state.session is not None:
                 state.session.flash = "请填写要合并到的专辑(编号或 /album/... 地址)"
@@ -3844,7 +4037,8 @@ class PublicSite:
                     state.session.flash = f"没有要合并到的那张专辑: {target}"
                 return Response.redirect(
                     "/album/" + T.quote_segment(key) + "/edit", status=303)
-            merged = store.merge_albums(keep_key=target, drop_key=key)
+            merged = store.merge_albums(keep_key=target, drop_key=key,
+                                        parts=parts)
             if merged:
                 # 与删除一致: 关联表/评论/修订里属于**被并条目**的痕迹清掉,
                 # 避免 /album/<key> 还能查到已经不存在的那张。
@@ -3867,7 +4061,9 @@ class PublicSite:
         if hasattr(self.data, "invalidate"):
             self.data.invalidate()
         if state.session is not None:
-            state.session.flash = ("已合并到 " + target) if merged else "合并失败"
+            state.session.flash = (
+                "已合并到 " + target + "（" + "、".join(parts) + "）"
+            ) if merged else "合并失败"
         return Response.redirect("/album/" + T.quote_segment(target), status=303)
 
     @staticmethod
@@ -4670,8 +4866,14 @@ class PublicSite:
         values: Mapping[str, Sequence[str]],
         state: auth.AuthState,
         cookies: list[str],
+        headers: Mapping[str, Any] | None = None,
+        body: bytes = b"",
     ) -> Response:
-        """编辑者保存专辑: 可写连接 + 白名单字段 + 错误回显."""
+        """编辑者保存专辑: 可写连接 + 白名单字段 + 错误回显.
+
+        ``headers`` / ``body`` 是为了判断"这次到底有没有带封面文件"
+        —— infobox 缓存图要不要转正取决于它(用户 m13899)。
+        """
         album = self.data.get_album(key)
         if album is None:
             return self._html(T.error_page(
@@ -4726,6 +4928,9 @@ class PublicSite:
             )
             return self._html(page, cookies=cookies)
         self.data.invalidate()
+        # infobox 封面: 前端已把图缓存到 /cover-cache(用户 m13899),
+        # 这里把它转成正式封面; 用户自己传了图则缓存作废。
+        self._apply_pending_cover(str(key), values, headers, body)
         # infobox 的 cover 地址: 前端正常会直接调 /album/<key>/cover-url,
         # 这里兜住"脚本没跑成、地址随主表单提交上来"的情况。
         # **只在本来就没封面时抓**: 已经有图就绝不覆盖用户的选择。
@@ -5581,11 +5786,14 @@ class PublicSite:
                 #      file input 的值恢复不回来, 只有这份 base64 还在);
                 #   ② cover_url_hint: infobox 带的图片地址, 服务端抓一次
                 #      (新建页还没有 key, 前端没法调 /cover-url)
-                if not self._save_album_cover_file(key, values):
-                    if not self._store_cover_from_data(key, values):
-                        _hint = str(text_field(values, "cover_url_hint") or "").strip()
-                        if _hint:
-                            self._store_cover_from_url(key, _hint)
+                # infobox 缓存图优先(用户 m13899): 用户没自带封面文件时,
+                # 把填表时缓存下来的那张转正。
+                if not self._apply_pending_cover(key, values, headers, body):
+                    if not self._save_album_cover_file(key, values):
+                        if not self._store_cover_from_data(key, values):
+                            _hint = str(text_field(values, "cover_url_hint") or "").strip()
+                            if _hint:
+                                self._store_cover_from_url(key, _hint)
                 # 其他照片: 新建页没有 key, 前端先把图缩成 data URL 塞进
                 # ``photos_data``, 这里建完专辑再逐张落盘(与编辑页同一个目录)。
                 self._save_new_photos(key, values)
