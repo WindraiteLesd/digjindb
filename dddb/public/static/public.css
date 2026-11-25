@@ -659,6 +659,13 @@ a:hover { text-decoration: underline; }
 .trk-mode { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
 .trk-mode input { accent-color: var(--accent); margin: 0; }
 .trk-paste-hint { margin: 0; font-size: 12px; line-height: 1.5; }
+/* 粘贴区自己的提交按钮: 用户粘完一大段要有个能点的东西(以前只有一句说明) */
+.trk-paste-acts {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding-top: 2px;
+}
+.trk-paste-acts .btn { padding: 7px 18px; font-size: 13.5px; }
+.trk-paste-acts .trk-paste-hint { flex: 1 1 220px; min-width: 0; }
 
 /* ---------- 新建页「高级」折叠区(专辑地址标识) ---------- */
 
