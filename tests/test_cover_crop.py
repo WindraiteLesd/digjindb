@@ -84,11 +84,15 @@ class TestTemplateWiring(unittest.TestCase):
                                  creating=False)
 
     def test_photo_block_rendered(self) -> None:
-        """有照片才渲染区块, 且不再有标题/按钮。"""
+        """有照片才渲染区块; 不再有标题文案。
+
+        编辑页的附图入口是封面上那个加号(`data-cover-add`),
+        「其他照片」现在只作为合并选项文字出现, 不再是一段标题。
+        """
         html = self._html([{"url": "/photo/x/1.jpg", "note": "会场照"}])
         self.assertIn("photo-block", html)
-        self.assertNotIn("data-photo-add", html)
-        self.assertNotIn("其他照片", html)
+        self.assertNotIn("<h3>其他照片</h3>", html)
+        self.assertNotIn('class="photo-head"', html)
 
     def test_photo_actions(self) -> None:
         html = self._html()
