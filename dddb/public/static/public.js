@@ -2452,10 +2452,15 @@
                ["credit_name", "人员", "多人用、分隔"]]
     },
     url: {
-      fields: [["url_key", "链接名", "自定义标签"],
+      fields: [["url_key", "链接名", "填网址自动识别"],
                ["url_value", "网址", "https://..."]]
     }
   };
+
+  /* 链接名输入框要挂上服务端渲染的候选表(<datalist id="dl-url_key">)。
+     模板里已有的行是服务端写的, 但「＋ 添加外链」动态建出来的行不带这个
+     属性 —— 结果新行既没有候选下拉, 也跟着丢了自动识名的观感(用户 m14663)。 */
+  var DATALIST_FIELDS = { url_key: "dl-url_key" };
 
   /* 新增一条词条: 结构必须与服务端 _credit_row 完全一致
    * (职责输入框 + 人员输入框 + 行内 chips + 隐藏 credit_name),
@@ -2536,6 +2541,10 @@
       input.type = "text";
       input.name = field[0];
       input.placeholder = field[2] || "";
+      if (DATALIST_FIELDS[field[0]]) {
+        input.setAttribute("list", DATALIST_FIELDS[field[0]]);
+        input.setAttribute("autocomplete", "off");
+      }
       label.appendChild(span);
       label.appendChild(input);
       row.appendChild(label);
@@ -2567,10 +2576,20 @@
         //   ③ 同 section 里第一个 .rows
         var host = addBtn.closest(".pair-add");
         var container = addBtn.closest(".rows");
-        if (!container && host && host.previousElementSibling) {
+        if (!container && host) {
+          // 从 .pair-add 往前找**第一个** .rows, 不能只取前一个兄弟:
+          // 外链卡片里 <datalist id="dl-url_key"> 就夹在中间, 取前一个兄弟
+          // 会把新行 appendChild 进 <datalist>(浏览器不渲染, 按钮看起来完全
+          // 没反应 —— 用户 m14663)。模板已把 datalist 挪到 .rows 之前,
+          // 这里再兜一层, 以后加别的兄弟节点也不会踩。
           var prev = host.previousElementSibling;
-          container = prev.classList && prev.classList.contains("rows")
-            ? prev : prev;
+          while (prev) {
+            if (prev.classList && prev.classList.contains("rows")) {
+              container = prev;
+              break;
+            }
+            prev = prev.previousElementSibling;
+          }
         }
         if (!container) {
           var section = addBtn.closest("section");
