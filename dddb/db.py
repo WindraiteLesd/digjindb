@@ -893,6 +893,20 @@ def strip_source_links(store: "Store", hosts: tuple[str, ...] = SOURCE_HOSTS,
     return affected, removed
 
 
+#: 「重复专辑合并」能选的部分(用户 m13899: 不再是全量合并)。
+#: 键同时是表单里 checkbox 的值, 顺序就是界面上的顺序。
+MERGE_PARTS: tuple[tuple[str, str], ...] = (
+    ("tracks", "曲目表"),
+    ("credits", "制作人员"),
+    ("urls", "外链"),
+    ("photos", "其他照片"),
+    ("meta", "基本信息（发售日 / 展会 / 社团 / 编号 / 价格 / 会场）"),
+    ("description", "简介"),
+    ("cover", "封面"),
+    ("tags", "艺人 / 风格 / 标签"),
+)
+
+
 class Store:
     """聚合数据仓库."""
 
@@ -2850,40 +2864,59 @@ class Store:
         groups.sort(key=lambda group: (-group["count"], group["title"]))
         return groups[:limit]
 
-    def merge_albums(self, keep_key: str, drop_key: str) -> bool:
+
+    def merge_albums(self, keep_key: str, drop_key: str,
+                     *, parts: Iterable[str] | None = None) -> bool:
         """把 ``drop_key`` 并进 ``keep_key``(去重清理用), 然后删掉被并的那条.
 
         保留项的字段优先; 它缺的字段用被并项补。依赖表(来源/标记/网易云匹配)
         一并迁移, 否则删掉被并项会留下孤儿行。
+
+        ``parts``: **只合并哪些部分**(用户 m13899 要求合并可选, 而不是一律全量)。
+        取值见 :data:`MERGE_PARTS`; 传 ``None`` 表示全部(命令行/旧调用方行为不变)。
         """
         keep = self.get_album(keep_key)
         drop = self.get_album(drop_key)
         if keep is None or drop is None or keep_key == drop_key:
             return False
+        # MERGE_PARTS 是 (键, 中文名) 元组, 这里要的是**键**的集合 ——
+        # 早先写成 set(MERGE_PARTS) 得到的是元组集合, want &= 之后永远为空,
+        # 于是勾什么都"合并成功"却什么都没并过来。
+        _part_keys = {part_key for part_key, _ in MERGE_PARTS}
+        want = set(_part_keys if parts is None else parts) & _part_keys
 
-        for field in ("title_original", "title_romaji", "circle", "release_date", "catalog_no",
-                      "cover_url", "cover_local", "description", "price", "booth", "hall"):
-            if not getattr(keep, field) and getattr(drop, field):
-                setattr(keep, field, getattr(drop, field))
-        if not keep.event and drop.event:
-            keep.event = drop.event
-            keep.event_kind = keep.event_kind or drop.event_kind
-        keep.artists = list(dict.fromkeys([*keep.artists, *drop.artists]))
-        keep.genres = list(dict.fromkeys([*keep.genres, *drop.genres]))
-        keep.tags = list(dict.fromkeys([*keep.tags, *drop.tags]))
-        if not keep.tracks and drop.tracks:
+        if "meta" in want:
+            for field in ("title_original", "title_romaji", "circle", "release_date",
+                          "catalog_no", "price", "booth", "hall"):
+                if not getattr(keep, field) and getattr(drop, field):
+                    setattr(keep, field, getattr(drop, field))
+            if not keep.event and drop.event:
+                keep.event = drop.event
+                keep.event_kind = keep.event_kind or drop.event_kind
+        if "description" in want and not keep.description and drop.description:
+            keep.description = drop.description
+        if "cover" in want:
+            for field in ("cover_url", "cover_local"):
+                if not getattr(keep, field) and getattr(drop, field):
+                    setattr(keep, field, getattr(drop, field))
+        if "tags" in want:
+            keep.artists = list(dict.fromkeys([*keep.artists, *drop.artists]))
+            keep.genres = list(dict.fromkeys([*keep.genres, *drop.genres]))
+            keep.tags = list(dict.fromkeys([*keep.tags, *drop.tags]))
+        if "tracks" in want and not keep.tracks and drop.tracks:
             keep.tracks = list(drop.tracks)
-        # 制作人员: 按 (职责, 规范化名字) 去重后并集 —— 保留项已有的同一职责
-        # 同一人不再重复; 被并项独有的职责(比如只在旧条目里补的编曲)会带过来。
-        _seen_credits = {(c.role, textutil.norm_key(c.name)) for c in keep.credits}
-        for credit in drop.credits:
-            stamp = (credit.role, textutil.norm_key(credit.name))
-            if stamp in _seen_credits:
-                continue
-            _seen_credits.add(stamp)
-            keep.credits.append(credit)
-        # 其他照片: 按地址去重后并集(照片是独立文件, 迁移条目不该丢图)。
-        if drop.photos:
+        if "credits" in want:
+            # 制作人员: 按 (职责, 规范化名字) 去重后并集 —— 保留项已有的同一职责
+            # 同一人不再重复; 被并项独有的职责(比如只在旧条目里补的编曲)会带过来。
+            _seen_credits = {(c.role, textutil.norm_key(c.name)) for c in keep.credits}
+            for credit in drop.credits:
+                stamp = (credit.role, textutil.norm_key(credit.name))
+                if stamp in _seen_credits:
+                    continue
+                _seen_credits.add(stamp)
+                keep.credits.append(credit)
+        if "photos" in want and drop.photos:
+            # 其他照片: 按地址去重后并集(照片是独立文件, 迁移条目不该丢图)。
             _seen_photos = {str(p.get("url") or "") for p in keep.photos
                             if isinstance(p, dict)}
             for photo in drop.photos:
@@ -2895,7 +2928,8 @@ class Store:
                 if url:
                     _seen_photos.add(url)
                 keep.photos.append(dict(photo))
-        keep.urls = {**drop.urls, **keep.urls}
+        if "urls" in want:
+            keep.urls = {**drop.urls, **keep.urls}
         keep.source_ids = {**drop.source_ids, **keep.source_ids}
         keep.raw = {**drop.raw, **keep.raw}
         keep.trust = max(int(keep.trust or 0), int(drop.trust or 0))
