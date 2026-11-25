@@ -525,12 +525,28 @@
       var extra = {};
       var cover = document.getElementById("cover-data");
       if (cover && cover.value) { extra.cover_data = cover.value; }
+      /* infobox 缓存封面的 token 也进草稿(用户 m13899): 刷新/报错回来之后
+         它还在, 提交时服务端才能把那张缓存图转正。 */
+      var cached = document.getElementById("cover-cache");
+      if (cached && cached.value) { extra.cover_cache = cached.value; }
       return extra;
     }
 
     function applyExtra(extra) {
+      if (!extra) { return; }
+      var cached = document.getElementById("cover-cache");
+      if (cached && extra.cover_cache) {
+        cached.value = String(extra.cover_cache);
+        var img = document.querySelector(".edit-cover-img img, .edit-cover-thumb img");
+        if (img) {
+          img.src = "/cover-cache/" + String(extra.cover_cache);
+          img.hidden = false;
+        }
+        var plus = document.querySelector(".cover-add-thumb .cover-plus");
+        if (plus) { plus.style.display = "none"; }
+      }
       var cover = document.getElementById("cover-data");
-      if (!cover || !extra || !extra.cover_data) { return; }
+      if (!cover || !extra.cover_data) { return; }
       cover.value = String(extra.cover_data);
       /* 派发 change: setupCoverPick 监听它把图贴回 .cover-preview-img */
       cover.dispatchEvent(new Event("change", { bubbles: true }));
@@ -2009,6 +2025,40 @@
     });
   }
 
+  /* 「重复专辑合并」弹窗(用户 m13899): 按钮在操作行里, 点开才显示表单。 */
+  function setupMergeDialog() {
+    var form = document.getElementById("merge-album-form");
+    if (!form) { return; }
+    function open() {
+      form.hidden = false;
+      document.body.classList.add("merge-open");
+      var input = form.querySelector('input[name="target"]');
+      if (input) { input.focus(); }
+    }
+    function close() {
+      form.hidden = true;
+      document.body.classList.remove("merge-open");
+    }
+    document.addEventListener("click", function (e) {
+      var t = e.target;
+      if (!t || !t.closest) { return; }
+      if (t.closest("[data-merge-open]")) { e.preventDefault(); open(); return; }
+      if (t.closest("[data-merge-close]")) { e.preventDefault(); close(); return; }
+      /* 点遮罩(弹窗之外)也关掉, 但别把「点弹窗内部」也算进去 */
+      if (!form.hidden && t === document.body) { close(); }
+    });
+    document.addEventListener("keydown", function (e) {
+      if (e.key === "Escape" && !form.hidden) { close(); }
+    });
+    /* 提交前至少要勾一项 —— 服务端也会拒, 这里先给即时反馈 */
+    form.addEventListener("submit", function (e) {
+      if (!form.querySelector('input[name="part"]:checked')) {
+        e.preventDefault();
+        window.alert("请至少勾选一项要合并的内容");
+      }
+    });
+  }
+
   function setupCoverPick() {
     /* 入口可能有多个: 「上传封面」小按钮 + 新建页那个大方块(没图时就是加号)。
        以前只取第一个匹配, 新建页的大方块点不动(用户 m13494)。 */
@@ -2044,6 +2094,15 @@
         if (hint) { hint.textContent = "图片不能超过 2MB"; }
         input.value = "";
         return;
+      }
+      /* 用户自己选了图 -> infobox 缓存的那张作废(用户 m13899:
+         "若不够清楚，由用户进行替换后删除云端缓存，改为保存由用户提交的")。
+         服务端看到缓存 token 为空就不会把它转正; 文件也在下次缓存清理时删掉。 */
+      var cached = document.getElementById("cover-cache");
+      if (cached && cached.value) {
+        cached.value = "";
+        cached.dispatchEvent(new Event("input", { bubbles: true }));
+        cached.dispatchEvent(new Event("change", { bubbles: true }));
       }
       if (hint) {
         hint.textContent = "已选择: " + file.name + " (" +
@@ -2977,6 +3036,7 @@
     // 新建专辑: 没有 key, 不能异步上传, 只选图 + 预览
     setupCoverPick();
     setupLocalPhotos();
+    setupMergeDialog();
     setupTrackRows();
     setupPairRows();
     setupNoEnterSubmit();
