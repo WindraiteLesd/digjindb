@@ -418,6 +418,21 @@ CREATE TABLE IF NOT EXISTS album_marks (
 );
 CREATE INDEX IF NOT EXISTS idx_album_marks_mark ON album_marks(mark);
 
+-- 歌单独有专辑的标记("这张我已经补进线上库了").
+--
+-- 为什么不能复用 album_marks: 那里的主键是 **本地专辑 key**, 而「② 歌单里有、本地库没有」
+-- 的条目本地库根本还没有 key —— 只有网易云的 album_id。硬写 album_marks 会被
+-- ``_albums_mark`` 的 ``get_album(key) is None`` 挡掉(那也是对的: 不许给不存在的碟打标记)。
+-- 所以按 album_id 另存一份; 名字一起留着, 方便以后清孤儿记录和显示。
+CREATE TABLE IF NOT EXISTS playlist_album_marks (
+    album_id   INTEGER NOT NULL,
+    mark       TEXT NOT NULL,
+    album_name TEXT NOT NULL DEFAULT '',
+    created_at REAL NOT NULL,
+    PRIMARY KEY (album_id, mark)
+);
+CREATE INDEX IF NOT EXISTS idx_playlist_album_marks_mark ON playlist_album_marks(mark);
+
 CREATE TABLE IF NOT EXISTS netease_matches (
     album_key     TEXT PRIMARY KEY,
     kind          TEXT NOT NULL DEFAULT 'song',
@@ -3054,6 +3069,60 @@ class Store:
         for row in self.query("SELECT album_key, mark FROM album_marks ORDER BY created_at"):
             out.setdefault(row["album_key"], []).append(row["mark"])
         return out
+
+    # -- 歌单独有专辑的标记 -------------------------------------------------
+    #
+    # 「② 歌单里有、本地库没有」的条目还没有本地 key, 只认网易云 album_id。
+    # 用户在那里的操作是「这张我已经补进线上库了」, 标完之后它就不该再催 ——
+    # 复用 :meth:`add_mark` 是不行的(它按 album_key 存, 而这里还没有 key, 硬写
+    # 会在 ``_albums_mark`` 被 ``get_album(key) is None`` 挡掉, 那也是对的:
+    # 不给不存在的专辑打标记)。所以按 album_id 单独一张表。
+
+    def add_playlist_mark(self, album_id: int, mark: str, album_name: str = "") -> bool:
+        """给「歌单里有、本地库没有」的专辑按 album_id 打标记. 幂等."""
+        mark = (mark or "").strip()
+        try:
+            album_id = int(album_id or 0)
+        except (TypeError, ValueError):
+            return False
+        if album_id <= 0 or not mark:
+            return False
+        self.execute(
+            "INSERT OR REPLACE INTO playlist_album_marks"
+            "(album_id, mark, album_name, created_at) VALUES (?,?,?,?)",
+            (album_id, mark, str(album_name or ""), time.time()),
+        )
+        return True
+
+    def remove_playlist_mark(self, album_id: int, mark: str) -> int:
+        try:
+            album_id = int(album_id or 0)
+        except (TypeError, ValueError):
+            return 0
+        cur = self.execute(
+            "DELETE FROM playlist_album_marks WHERE album_id = ? AND mark = ?",
+            (album_id, (mark or "").strip()),
+        )
+        return cur.rowcount
+
+    def playlist_marks_map(self) -> dict[int, list[str]]:
+        """``{album_id: [mark, ...]}`` —— 歌单对照一次取回, 避免 N+1."""
+        out: dict[int, list[str]] = {}
+        for row in self.query(
+            "SELECT album_id, mark FROM playlist_album_marks ORDER BY created_at"
+        ):
+            out.setdefault(int(row["album_id"] or 0), []).append(row["mark"])
+        out.pop(0, None)
+        return out
+
+    def playlist_marked_ids(self, mark: str | None = None) -> set[int]:
+        if mark:
+            rows = self.query(
+                "SELECT album_id FROM playlist_album_marks WHERE mark = ?", (mark,)
+            )
+        else:
+            rows = self.query("SELECT DISTINCT album_id FROM playlist_album_marks")
+        return {int(r["album_id"] or 0) for r in rows if int(r["album_id"] or 0) > 0}
 
     # -- 公开端评论 ---------------------------------------------------------
     #
