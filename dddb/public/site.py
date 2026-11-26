@@ -1342,6 +1342,9 @@ def form_display_values(values: Mapping[str, Sequence[str]]) -> dict[str, Any]:
         # 粘贴框内容在重填时原样还回(粘一次就该够), 模式单选也记住
         "track_paste": raw_field(values, "track_paste"),
         "track_mode": normalize_track_mode(text_field(values, "track_mode")),
+        # 用户 m17600: 曲目表"已暂存"标记, 重填时要还回去, 否则用户校验失败
+        # 回来再点一次「保存」, 又会拿粘贴框原文覆盖他改过的表格。
+        "track_staged": text_field(values, "track_staged"),
         # 制作人员粘贴框同理(用户 m14663)
         "credit_paste": raw_field(values, "credit_paste"),
         "credit_mode": creditparse.normalize_credit_mode(
@@ -1447,6 +1450,16 @@ def normalize_track_mode(value: Any) -> str:
     """单选框值 -> 合法模式(空 / 伪造值 -> ``replace``)."""
     text = str(value or "").strip().lower()
     return text if text in TRACK_MODES else "replace"
+
+
+def tracks_already_staged(values: Mapping[str, Sequence[str]]) -> bool:
+    """粘贴框里的曲目是否已经"填入"过下面的表格(用户 m17600).
+
+    前端点「填入曲目表（暂存）」时会把这个隐藏域置成 ``1``。置过之后,
+    表格里的内容就是用户**看过并且改过**的权威版本 —— 服务端不能再拿
+    识别框原文重新解析一遍盖回去(否则用户改的标题、删掉的行全白做)。
+    """
+    return text_field(values, "track_staged") == "1"
 
 
 def merge_credits_from_paste(
@@ -5239,8 +5252,11 @@ class PublicSite:
         paste_text = raw_field(values, "track_paste")
         mode = normalize_track_mode(text_field(values, "track_mode"))
         has_paste = bool(paste_text.strip())
-        parsed = parse_tracklist(paste_text) if has_paste else []
-        paste_missed = has_paste and not parsed
+        # 用户 m17600: 已经点过「填入曲目表（暂存）」就不再解析粘贴框 ——
+        # 下面表格里的内容才是用户最后看到并改过的那份。
+        staged = tracks_already_staged(values)
+        parsed = parse_tracklist(paste_text) if (has_paste and not staged) else []
+        paste_missed = has_paste and not parsed and not staged
         if parsed:
             patch["track_list"] = merge_pasted_tracks(patch.get("track_list") or [], parsed, mode)
         # 制作人员「整段粘贴」: 同一套语义 —— 解析出词条就按 credit_mode
@@ -6087,7 +6103,7 @@ class PublicSite:
                 # 以前**完全没读** track_paste —— 粘贴进来的曲目全丢。
                 # 这里与编辑页用同一套解析 + 合并。
                 paste_text = raw_field(values, "track_paste")
-                if paste_text.strip():
+                if paste_text.strip() and not tracks_already_staged(values):
                     parsed = parse_tracklist(paste_text)
                     if parsed:
                         patch["track_list"] = merge_pasted_tracks(
