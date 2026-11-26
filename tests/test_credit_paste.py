@@ -159,19 +159,22 @@ class TestPasteBlockRender(unittest.TestCase):
         base.update(values)
         return self.T.edit_album_page(self.ctx, album=self.album, values=base)
 
-    def test_block_present_with_own_submit(self):
+    def test_block_present_with_own_stage_button(self):
         html = self.render()
         self.assertIn('class="trk-paste credit-paste"', html)
         self.assertIn('name="credit_paste"', html)
         self.assertIn('data-credit-apply="1"', html)
-        self.assertIn("保存并填入词条", html)
+        self.assertIn("填入词条（暂存）", html)
+        # 用户 m16094: 点完不直接提交, 只是先填进下面的词条
+        self.assertNotIn("保存并填入词条", html)
 
-    def test_button_submits_whole_form(self):
+    def test_button_never_submits_whole_form(self):
         html = self.render()
         start = html.index('class="trk-paste credit-paste"')
         end = html.index("</details>", start)
         block = html[start:end]
-        self.assertIn('type="submit"', block)
+        self.assertIn('type="button"', block)
+        self.assertNotIn('type="submit"', block)
         self.assertNotIn("formaction", block)
         self.assertLess(html.index('class="edit-form"'),
                         html.index('data-credit-apply="1"'))
@@ -179,7 +182,7 @@ class TestPasteBlockRender(unittest.TestCase):
     def test_hint_explains_link_dropping(self):
         html = self.render()
         self.assertIn("括号里的链接会被忽略", html)
-        self.assertIn("没识别出词条时现有词条保持原样", html)
+        self.assertIn("点最下面的「保存」才会真正写进库里", html)
 
     def test_open_when_pasted(self):
         html = self.render(credit_paste=PASTE, credit_mode="append")
