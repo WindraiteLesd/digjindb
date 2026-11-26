@@ -569,7 +569,7 @@ def layout(
 <!-- ?v=2: 图标换过, 但静态资源被 CF/浏览器缓存 1 天, 加版本号强制刷新 -->
 <link rel="icon" href="/static/favicon.svg?v=2" type="image/svg+xml">
 <!-- 唯一的脚本: 同源外链, 只做渐进增强(CSP 只给 script-src 'self') -->
-<script src="/static/public.js?v=68" defer></script>
+<script src="/static/public.js?v=69" defer></script>
 <script src="/static/cover-crop.js?v=6" defer></script>
 <script src="/static/infobox.js?v=10" defer></script>
 </head>
@@ -5277,8 +5277,10 @@ def edit_album_page(
         '<button type="button" class="btn-ghost btn-xs" data-pair-add="url">'
         "＋ 添加外链</button></div>"
     )
-    # 曲目「整段粘贴」区: 用户端零脚本, 所以粘贴框就是**表单的一个普通字段**
-    # (name="track_paste"), 跟着表单一起 POST, 由服务端 dddb/trackparse.py 解析。
+    # 曲目「整段粘贴」区(用户 m16094): 点按钮**只在前端解析并填进下面曲目表**,
+    # 不发任何请求, 也不当场保存; 真正的写库要等用户点最下面的「保存」。
+    # 输入框仍是普通表单字段(name="track_paste"), 所以即使 JS 没跑起来,
+    # 服务端 dddb/trackparse.py 那条老链路也还兜得住(表单照常提交时同样会解析)。
     # 校验失败重填时把用户粘过的内容原样还回去(并把折叠区展开), 别让人白粘一次。
     paste_text = str(values.get("track_paste") or "")
     track_mode = str(values.get("track_mode") or "replace")
@@ -5302,14 +5304,13 @@ def edit_album_page(
         f'<label class="trk-mode"><input type="radio" name="track_mode" value="append"{append_checked}>'
         " 追加到末尾</label>"
         "</div>"
-        # 粘贴区自己的提交按钮: 以前这里只有一句「保存时随表单一起提交」,
-        # 用户粘完一大段找不到可以点的东西(截图报「这里的提交按钮没了」)。
-        # 公开端没有 AJAX, 所以它就是个普通 submit —— 整张表单一起交给服务端,
-        # 由 dddb/trackparse.py 解析 track_paste 后并进曲目表。
+        # 粘贴区自己的按钮(用户 m14440: 以前这里只有一句「保存时随表单一起提交」,
+        # 用户粘完一大段找不到可以点的东西)。用户 m16094 起它**不再提交表单**,
+        # 点一下只是把解析结果填进下面曲目表(前端暂存), 写库仍由最下面的「保存」负责。
         '<div class="trk-paste-acts">'
-        '<button type="submit" class="btn" data-track-apply="1">保存并填入曲目表</button>'
-        '<span class="trk-paste-hint muted">会连同其它字段一起保存; '
-        "没识别出曲目时曲目表保持原样。</span>"
+        '<button type="button" class="btn" data-track-apply="1">填入曲目表（暂存）</button>'
+        '<span class="trk-paste-hint muted">只是先填到下面的曲目表; '
+        "点最下面的「保存」才会真正写进库里。</span>"
         "</div>"
         "</div>"
         "</details>"
@@ -5317,6 +5318,7 @@ def edit_album_page(
     # 制作人员「整段粘贴」区(用户 m14663): 与曲目粘贴同款思路 ——
     # 输入框就是表单的一个普通字段(name="credit_paste"), 服务端用
     # dddb/creditparse.py 解析「职责: 名字」后并进词条; 括号里的链接会被丢掉。
+    # 用户 m16094 起按钮也改成**前端暂存**: 点一下只把解析结果填进下面的词条行。
     credit_paste_text = str(values.get("credit_paste") or "")
     credit_mode = str(values.get("credit_mode") or "replace")
     if credit_mode not in ("replace", "append"):
@@ -5342,9 +5344,9 @@ def edit_album_page(
         " 追加到末尾</label>"
         "</div>"
         '<div class="trk-paste-acts">'
-        '<button type="submit" class="btn" data-credit-apply="1">保存并填入词条</button>'
-        '<span class="trk-paste-hint muted">会连同其它字段一起保存; '
-        "没识别出词条时现有词条保持原样。</span>"
+        '<button type="button" class="btn" data-credit-apply="1">填入词条（暂存）</button>'
+        '<span class="trk-paste-hint muted">只是先填到下面的词条; '
+        "点最下面的「保存」才会真正写进库里。</span>"
         "</div>"
         "</div>"
         "</details>"
