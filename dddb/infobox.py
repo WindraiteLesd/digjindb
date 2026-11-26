@@ -52,15 +52,17 @@ MARK = "[dddb]"
 #: 字段顺序(导出时按这个顺序写, 解析时也按这个认)
 FIELDS = (
     "key", "title_original", "title", "title_romaji", "circle", "company",
-    "artists", "event", "release_date", "catalog_no", "price", "hall",
-    "booth", "tags", "genres", "cover", "links", "credits", "tracks",
-    "description",
+    "artists", "original_work", "producer", "platform", "release_kind",
+    "event", "release_date", "catalog_no", "price", "hall",
+    "booth", "tags", "genres", "cover", "disc", "links", "credits",
+    "tracks", "description",
 )
 
 #: 单值字段(其它是多行)
 SINGLE_FIELDS = frozenset({
     "key", "title_original", "title", "title_romaji", "circle", "company",
-    "artists", "event", "release_date", "catalog_no", "price", "hall",
+    "artists", "original_work", "producer", "platform", "release_kind",
+    "event", "release_date", "catalog_no", "price", "hall",
     "booth", "tags", "genres", "cover",
 })
 
@@ -82,6 +84,9 @@ _CREDIT = re.compile(r"^\s*([^:：]+)\s*[:：]\s*(.+?)\s*$")
 
 #: 外链写法: "标签: URL" / "标签 || URL"
 _LINK = re.compile(r"^\s*([^:：|]+?)\s*(?:[:：]|\|\|)\s*(\S+)\s*$")
+
+#: 分碟写法(用户 m16568): "2" 或 "2: Nightmare" —— 之后的行都算这一碟
+_DISC_LINE = re.compile(r"^\s*(\d{1,2})(?:\s*[:：]\s*(.*))?\s*$")
 
 
 #: 三种输入形状 —— ``build()`` 必须都能认, 否则线上编辑页会导出一段空壳。
@@ -182,6 +187,30 @@ def _clean(value: Any) -> str:
 
 
 def _fmt_duration(seconds: Any) -> str:
+    """秒数或 ``3:42`` 文本 -> ``3:42``; 0/空返回空串.
+
+    用户 m16568: 导出的 infobox 里没有曲目时长。根因是这里只认 ``int``,
+    而站长端导入链路(``_push_to_cloud``)传进来的 ``duration`` 已经是
+    ``"3:42"`` 这种字符串 —— ``int("3:42")`` 抛 ValueError, 整条时长被吃掉。
+    所以两种形状都要认: 裸秒数格式化, 已格式化的原样(规整后)返回。
+    """
+    if isinstance(seconds, str):
+        text = seconds.strip()
+        if not text:
+            return ""
+        # 已经是 "m:ss" / "h:mm:ss": 规整一下(补零)后直接用
+        if ":" in text:
+            parts = text.split(":")
+            try:
+                nums = [int(p) for p in parts]
+            except ValueError:
+                return ""
+            if len(nums) == 2:
+                return "{}:{:02d}".format(nums[0], nums[1])
+            if len(nums) == 3:
+                return "{}:{:02d}:{:02d}".format(nums[0], nums[1], nums[2])
+            return ""
+        seconds = text
     try:
         n = int(seconds or 0)
     except (TypeError, ValueError):
@@ -236,7 +265,9 @@ def build(draft: Any) -> str:
     if _disp and _disp != _orig:
         put("title", _disp)
     for name in ("title_romaji", "circle", "event",
-                 "release_date", "catalog_no", "price", "hall", "booth"):
+                 "release_date", "catalog_no", "price", "hall", "booth",
+                 # 用户 m16568: 出品信息新增的四项
+                 "original_work", "producer", "platform", "release_kind"):
         put(name, field(name))
     # 发行公司: 只在**与社团不同**时才输出.
     # 网易云的厂牌常常就是社团名, 导出后会变成 ``circle || N_dog`` 与
@@ -285,13 +316,43 @@ def build(draft: Any) -> str:
 
     tracks = d.get("tracks")
     if isinstance(tracks, (list, tuple)):
+        # 用户 m16568: 分碟专辑要能区分碟 —— 输出「disc || N: 碟名」(可留空名),
+        # 碟内曲目仍写 tracks || 序号. 曲名 (序号按碟内重新数, 与网页一致)。
+        _discs = d.get("discs")
+        _disc_names: dict[str, str] = {}
+        if isinstance(_discs, Mapping):
+            for _key, _name in _discs.items():
+                try:
+                    _num = int(str(_key).strip())
+                except (TypeError, ValueError):
+                    continue
+                _clean_name = _clean(_name)
+                if _num > 0 and _clean_name:
+                    _disc_names[str(_num)] = _clean_name
+        _seen_discs: dict[int, int] = {}
+        _emitted: set[int] = set()
+        # 只有真的多碟时才写 disc 行 —— 单碟专辑多一行「disc || 1」纯属噪声
+        _multi = len({int(t.get("disc") or 1) for t in tracks
+                      if isinstance(t, Mapping)}) > 1
         for i, tr in enumerate(tracks, 1):
             if not isinstance(tr, Mapping):
                 continue
             title = _clean(tr.get("title"))
             if not title:
                 continue
-            idx = _clean(tr.get("index")) or str(i)
+            try:
+                disc_no = int(tr.get("disc") or 1)
+            except (TypeError, ValueError):
+                disc_no = 1
+            if disc_no <= 0:
+                disc_no = 1
+            if _multi and disc_no not in _emitted:
+                _emitted.add(disc_no)
+                _name = _disc_names.get(str(disc_no), "")
+                lines.append("disc || {}{}".format(
+                    disc_no, ": " + _name if _name else ""))
+            _seen_discs[disc_no] = _seen_discs.get(disc_no, 0) + 1
+            idx = _clean(tr.get("index")) or str(_seen_discs[disc_no])
             dur = _fmt_duration(tr.get("duration"))
             tail = ""
             ar = tr.get("artists")
@@ -323,11 +384,14 @@ def parse(text: Any) -> dict[str, Any]:
     raw = str(text or "").replace("\r\n", "\n").replace("\r", "\n")
     out: dict[str, Any] = {
         "key": "", "source": "infobox", "meta": {}, "cover_url": "",
-        "cover_file": "", "credits": [], "urls": {}, "tracks": [],
+        "cover_file": "", "credits": [], "urls": {}, "tracks": [], "discs": {},
         "warnings": [], "unrecognized_roles": [],
     }
     meta = out["meta"]
     current = ""
+    # 用户 m16568: 分碟 —— disc || 2: Nightmare 之后的行都算第 2 碟,
+    # 直到遇见下一个 disc 行。没写 disc 的按第 1 碟(老文本照旧可用)。
+    current_disc = 1
 
     for line in raw.split("\n"):
         if not line.strip() or line.strip() == MARK:
@@ -382,6 +446,22 @@ def parse(text: Any) -> dict[str, Any]:
                 c["alias"] = alias
             out["credits"].append(c)
 
+        elif current == "disc":
+            # disc || 2   或者   disc || 2: Nightmare
+            dm = _DISC_LINE.match(value)
+            if not dm:
+                continue
+            try:
+                disc_no = int(dm.group(1))
+            except (TypeError, ValueError):
+                continue
+            if disc_no <= 0:
+                continue
+            current_disc = disc_no
+            disc_name = _clean(dm.group(2))
+            if disc_name:
+                out["discs"][str(disc_no)] = disc_name
+
         elif current == "tracks":
             tm = _TRACK.match(value)
             if not tm:
@@ -393,7 +473,7 @@ def parse(text: Any) -> dict[str, Any]:
             if not title:
                 continue
             tr: dict[str, Any] = {
-                "disc": 1, "index": int(index) if index.isdigit() else 0,
+                "disc": current_disc, "index": int(index) if index.isdigit() else 0,
                 "title": title, "duration": dur,
             }
             if ar:
@@ -468,8 +548,12 @@ HELP_TEXT = """\
 | title_original | 原题（必填） | BLOOD SNOW |
 | title | 译名/显示名 | 血雪 |
 | title_romaji | 罗马字 | Blood Snow |
-| circle | 社团 | Winter Bouquet |
-| company | 发行公司 | Winter Records |
+| circle | 社团 / 出品方 | Winter Bouquet |
+| producer | 制作人（个人名义出品时填这里） | Winter |
+| original_work | 原作 IP（东方 / 蔚蓝档案 / 原神 …），原创留空 | 东方Project |
+| platform | 发布平台（独立同人侧：BOOTH / Bandcamp …） | BOOTH |
+| release_kind | 出品侧别：`event`（同人展）或 `indie`（独立同人） | event |
+| company | 发行公司（历史字段，编辑页已不再单独填） | Winter Records |
 | artists | 艺人，多个用 `/` 分隔 | A / B |
 | event | 展会 | M3-2026秋 |
 | release_date | 发售日 | 2026-10-25 |
@@ -498,7 +582,16 @@ credits || 编曲: 某乙
 credits || 钢琴: 某丙 (Somebody) [马甲名]
 ```
 
-**tracks**（曲目）——每行 `序号. 曲名 [时长] / 艺人`
+**disc**（分碟）——单独一行，之后出现的 `tracks` 都算这一碟；`disc || 2: 名字` 可以顺手给碟起名。单碟专辑不用写。
+
+```
+disc || 1
+tracks || 1. Luciphobia [3:57]
+disc || 2: Nightmare
+tracks || 1. Hallucination [4:12] / MALVA.
+```
+
+**tracks**（曲目）——每行 `序号. 曲名 [时长] / 艺人`；序号在每碟内重新从 1 开始
 
 ```
 tracks || 1. Luciphobia [3:57]
