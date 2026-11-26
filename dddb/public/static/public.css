@@ -2109,6 +2109,13 @@ tr.track-item.is-open .track-toggle { transform: rotate(90deg); }
   opacity: .62;
   font-size: 11px;
 }
+/* 用户 m17600: 值单独包一层, 手机窄屏时才能正常换行(以前直接是裸文本,
+   外层 inline-flex 会把它压成一列单字) */
+.track-extra-value {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
 
 /* ==========================================================================
    公开资料页(/u/<name>): 头像 + 元信息 + 各区块
@@ -3009,9 +3016,13 @@ tr.track-item.is-open .track-toggle { transform: rotate(90deg); }
   /* 没有艺人时那一行不占高度 */
   .tracklist td.track-artists:empty { display: none; }
 
-  /* 展开的补充信息: 整行 */
-  .tracklist tr.track-extra-row { display: table-row; }
+  /* 展开的补充信息: 整行
+     用户 m17600: 这里以前是 display: table-row —— 手机上没有 table 容器,
+     匿名表格会按 min-content 收缩, 于是「翻译歌名」被压成一列单字。改成块级。 */
+  .tracklist tr.track-extra-row { display: block; }
   .tracklist tr.track-extra-row > td {
+    display: block;
+    width: auto;
     white-space: normal;
     padding: 8px 10px;
   }
