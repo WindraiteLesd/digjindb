@@ -565,11 +565,11 @@ def layout(
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
 <title>{esc(title)} · {esc(ctx.site_name)}</title>
-<link rel="stylesheet" href="/static/public.css?v=82">
+<link rel="stylesheet" href="/static/public.css?v=83">
 <!-- ?v=2: 图标换过, 但静态资源被 CF/浏览器缓存 1 天, 加版本号强制刷新 -->
 <link rel="icon" href="/static/favicon.svg?v=2" type="image/svg+xml">
 <!-- 唯一的脚本: 同源外链, 只做渐进增强(CSP 只给 script-src 'self') -->
-<script src="/static/public.js?v=71" defer></script>
+<script src="/static/public.js?v=72" defer></script>
 <script src="/static/cover-crop.js?v=7" defer></script>
 <script src="/static/infobox.js?v=11" defer></script>
 </head>
@@ -1265,8 +1265,9 @@ def _detail_tracks_html(
         if not items:
             return ""
         return '<div class="track-extra">{}</div>'.format(
-            "".join('<span class="track-extra-item"><b>{}</b>{}</span>'.format(
-                esc(label), esc(value)) for label, value in items))
+            "".join('<span class="track-extra-item"><b>{}</b>'
+                    '<span class="track-extra-value">{}</span></span>'.format(
+                        esc(label), esc(value)) for label, value in items))
 
     blocks: list[str] = []
     for disc_no in sorted(disc_map):
@@ -5351,6 +5352,12 @@ def edit_album_page(
         track_mode = "replace"
     replace_checked = " checked" if track_mode == "replace" else ""
     append_checked = " checked" if track_mode == "append" else ""
+    # 用户 m17600: 曲目表的"已暂存"标记。前端点过「填入曲目表」就置 1,
+    # 服务端见到它就不再拿这个框里的原文重新解析(否则用户在下面表格里
+    # 改过的标题/删掉的行会被粘贴框原文盖回去)。
+    _staged_html = '<input type="hidden" name="track_staged" value="{}">'.format(
+        esc(str(values.get("track_staged") or "")))
+
     paste_html = (
         '<details class="trk-paste"' + (" open" if paste_text else "") + ">"
         # 用户 m16568: 文案去掉「从别处」, 改成「粘贴文本识别曲目表」——
@@ -5377,7 +5384,11 @@ def edit_album_page(
         '<span class="trk-paste-hint muted">只是先填到下面的曲目表; '
         "点最下面的「保存」才会真正写进库里。</span>"
         "</div>"
-        "</div>"
+        # 用户 m17600: 点过「填入曲目表」之后, 下面表格里的内容就是权威版本 ——
+        # 用户在表格里改过标题/删过行, 保存时**不能**再拿这个框里的原文重新解析
+        # 盖回去。这里放一个标记, 前端暂存成功就置 1, 服务端见到它就跳过粘贴解析。
+        + _staged_html
+        + "</div>"
         "</details>"
     )
     # 制作人员「整段粘贴」区(用户 m14663): 与曲目粘贴同款思路 ——
