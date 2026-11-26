@@ -153,6 +153,7 @@ class ParsedTrack:
     duration: int | None = None                     #: 秒, 解析不出为 None
     raw: str = ""                                   #: 原行(便于 UI 回显核对)
     number: int | None = None                       #: 原文本里显式写出的轨号
+    disc: int = 1                                   #: 属于第几碟(用户 m16568: 支持分碟)
 
     @property
     def duration_text(self) -> str:
@@ -168,6 +169,7 @@ class ParsedTrack:
             "duration_text": self.duration_text,
             "number": self.number,
             "raw": self.raw,
+            "disc": self.disc,
         }
 
 
@@ -192,8 +194,13 @@ _INDEX_RE = re.compile(
 _BULLET_RE = re.compile(r"^(?:[・•·‣■□●○◆◇★☆]|[*+]\s*|[-–—]\s+)")
 #: 注释行(``#`` 后面跟数字的**不是**注释, 那是 ``#01 曲名``)
 _COMMENT_RE = re.compile(r"^(?:#(?!\s*\d)|//|;|※|>\s)")
-#: 碟号 / 卷号分隔行
-_DISC_RE = re.compile(r"^(?:disc|disk|cd|vol\.?|volume|ディスク|碟)[ \t]*[-–—]?[ \t]*\d+$", re.IGNORECASE)
+#: 碟号 / 卷号分隔行(用户 m16568: 要能识别分碟, 所以这里**捕获**碟号而不是丢掉)
+_DISC_RE = re.compile(
+    r"^(?:disc|disk|cd|vol\.?|volume|ディスク|碟)[ \t]*[-–—]?[ \t]*(\d+)$",
+    re.IGNORECASE,
+)
+#: 只有碟号、没写 ``Disc`` 前缀的写法(``Disc 2`` 之外还有 ``2枚目`` / ``第2碟``)
+_DISC_CN_RE = re.compile(r"^第?\s*(\d{1,2})\s*(?:枚目|碟|盘|張目|张目)$")
 #: 兜底: 空行 / 分隔线
 _RULE_RE = re.compile(r"^[-=_*~·—–\s]{3,}$")
 
@@ -252,6 +259,22 @@ def split_title_artists(text: str) -> tuple[str, list[str]]:
     return title, artists
 
 
+def _disc_of(line: str) -> int | None:
+    """这一行是碟号分隔行吗? 是则返回碟号(用户 m16568: 支持分碟).
+
+    ``Disc 2`` / ``CD1`` / ``Disc - 2`` / ``碟 2`` / ``第2碟`` / ``2枚目`` 都认。
+    不是碟号行返回 ``None``。
+    """
+    match = _DISC_RE.match(line) or _DISC_CN_RE.match(line)
+    if not match:
+        return None
+    try:
+        number = int(match.group(1))
+    except (TypeError, ValueError):
+        return None
+    return number if number > 0 else None
+
+
 def _is_header(line: str) -> bool:
     """整行是表头 / 栏目标题?"""
     token = _HEADER_SEP_RE.sub("", line).lower()
@@ -289,6 +312,7 @@ class _Pending:
     artists: list[str] = field(default_factory=list)
     alt_title: str = ""                    #: 弱轨号被否决时: 整行当标题
     alt_artists: list[str] = field(default_factory=list)
+    disc: int = 1                          #: 属于第几碟(碟号行之后的行都算新碟)
 
 
 def _parse_table(cells: list[str], duration: int | None) -> _Pending:
@@ -409,10 +433,17 @@ def parse_tracklist(text: str) -> list[ParsedTrack]:
     source = text if isinstance(text, str) else ("" if text is None else str(text))
     lines = source.splitlines()
     pending: list[_Pending] = []
+    disc = 1                                  #: 当前碟号(遇到碟号行就换)
     for line in lines:
         normalized = _norm(line).strip()
+        #: 用户 m16568: 碟号行不再是"噪声" —— 它是分碟的分界, 记下来给后面每行打标
+        found = _disc_of(normalized)
+        if found is not None:
+            disc = found
+            continue
         item = _scan_line(normalized, line.strip())
         if item is not None:
+            item.disc = disc
             pending.append(item)
 
     tracks: list[ParsedTrack] = []
@@ -433,5 +464,6 @@ def parse_tracklist(text: str) -> list[ParsedTrack]:
             duration=item.duration,
             raw=item.raw,
             number=number,
+            disc=item.disc,
         ))
     return tracks
