@@ -267,6 +267,24 @@ a:hover { text-decoration: underline; }
 .field select:focus, .field input:focus { outline: 2px solid var(--accent-soft); border-color: var(--accent); }
 .field-check { grid-template-columns: auto 1fr; align-items: center; gap: 8px; color: var(--text-dim); }
 .field-actions { display: flex; gap: 8px; align-items: center; margin-top: 2px; }
+
+/* 出品信息: 同人展侧 / 独立同人侧(用户 m16568) */
+.release-kind {
+  display: flex;
+  gap: 18px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+.release-kind-opt {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.release-kind-opt input { accent-color: var(--accent); }
+.info-group[hidden] { display: none; }
 .field-actions button {
   flex: 1 1 auto; background: var(--panel-2); color: var(--text);
   border: 1px solid var(--border); border-radius: var(--radius-sm);
@@ -1622,6 +1640,20 @@ img[src^="/avatar/"] {
   border-bottom: 1px solid var(--line, #2a2f3a);
 }
 .disc-title { font-weight: 600; font-size: 15px; letter-spacing: .3px; }
+/* 碟名(用户 m16568): 紧跟在 Disc 号后面, 窄一些, 不抢视觉重心 */
+.disc-name-input {
+  flex: 1 1 160px;
+  min-width: 0;
+  max-width: 260px;
+  padding: 4px 8px;
+  font-size: 13px;
+  border: 1px solid var(--border-soft, var(--line, #2a2f3a));
+  border-radius: 6px;
+  background: var(--bg-soft, transparent);
+  color: inherit;
+}
+.disc-name-input::placeholder { opacity: .55; }
+.disc-name-input:focus { border-color: var(--accent); outline: none; }
 .disc-tools { display: flex; gap: 8px; flex-wrap: wrap; }
 .disc-tools .btn-ghost { white-space: nowrap; }
 
@@ -2682,6 +2714,61 @@ tr.track-item.is-open .track-toggle { transform: rotate(90deg); }
 /* .detail 已有完整定义(见上文 详情页网格), 这里只补信息列的约束 */
 .detail-info { min-width: 0; }
 .detail-cover { min-width: 0; }
+
+/* ---- 详情页封面画廊(用户 m16568: 一张专辑可能有两张封面) ----
+   右侧叠一个透明按钮「下一张」, 底部圆点直接跳;
+   没脚本时第一张照常显示, 只是按钮无效。 */
+.detail-gallery { position: relative; }
+.detail-gallery-stack { position: relative; }
+.detail-cover-img { display: block; width: 100%; height: auto; border-radius: 12px; }
+.detail-cover-img.is-hidden { display: none; }
+.cover-switch {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 34%;
+  height: 100%;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  cursor: pointer;
+  border-radius: 0 12px 12px 0;
+}
+.cover-switch:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.cover-switch:hover { background: rgba(255, 255, 255, .06); }
+.cover-switch-count {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  padding: 2px 8px;
+  font-size: 12px;
+  line-height: 1.6;
+  border-radius: 999px;
+  color: #fff;
+  background: rgba(0, 0, 0, .58);
+  font-variant-numeric: tabular-nums;
+}
+.cover-dots {
+  position: absolute;
+  left: 50%;
+  bottom: 10px;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 6px;
+}
+.cover-dot {
+  width: 8px;
+  height: 8px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, .45);
+  cursor: pointer;
+}
+.cover-dot.is-active { background: #fff; }
 
 /* 曲目表列(详情页): 序号 / 时长 数字列等宽、右对齐 */
 .tracklist .col-num,
