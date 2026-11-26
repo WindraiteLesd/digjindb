@@ -565,13 +565,13 @@ def layout(
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
 <title>{esc(title)} · {esc(ctx.site_name)}</title>
-<link rel="stylesheet" href="/static/public.css?v=81">
+<link rel="stylesheet" href="/static/public.css?v=82">
 <!-- ?v=2: 图标换过, 但静态资源被 CF/浏览器缓存 1 天, 加版本号强制刷新 -->
 <link rel="icon" href="/static/favicon.svg?v=2" type="image/svg+xml">
 <!-- 唯一的脚本: 同源外链, 只做渐进增强(CSP 只给 script-src 'self') -->
-<script src="/static/public.js?v=69" defer></script>
-<script src="/static/cover-crop.js?v=6" defer></script>
-<script src="/static/infobox.js?v=10" defer></script>
+<script src="/static/public.js?v=71" defer></script>
+<script src="/static/cover-crop.js?v=7" defer></script>
+<script src="/static/infobox.js?v=11" defer></script>
 </head>
 <body{_bg_attr(ctx)}>
 <a class="skip" href="#content">跳到正文</a>
@@ -1304,9 +1304,15 @@ def _detail_tracks_html(
                     '<td colspan="3">{}</td></tr>'.format(extra))
         disc_title = ""
         if multi_disc:
-            disc_title = ('<div class="disc-subtitle">Disc {:02d}'
+            # 用户 m16568: 给过的碟名要显示在碟头(Disc 02 · Nightmare)
+            _disc_names = album.get("discs") if isinstance(album.get("discs"), Mapping) else {}
+            _named = str(_disc_names.get(str(disc_no)) or "")
+            _label = "Disc {:02d}".format(disc_no)
+            if _named:
+                _label += " · " + esc(_named)
+            disc_title = ('<div class="disc-subtitle">{}'
                           '<span class="disc-sub-count">{} 首</span></div>'
-                          .format(disc_no, len(disc_map[disc_no])))
+                          .format(_label, len(disc_map[disc_no])))
         blocks.append(
             disc_title
             + '<div class="table-scroll"><table class="tracklist" data-key="{}">'
@@ -1764,9 +1770,60 @@ def album_detail_page(
 
     # 详情页区块顺序(用户要求):
     #   ① 社团(紧跟标题) ② 艺人/社团 + 制作人员(合并) ③ 简介 ④ 曲目表(可折叠) ⑤ 外链
+    # 用户 m16568: 有的专辑有两张封面(第二张其实是附图, 比如双碟各一张)。
+    # 详情页把封面 + 附图做成可切换的画廊: 右侧叠一个点击图层, 点了换下一张;
+    # 底部还有小圆点可以直接跳。全部用纯 HTML + CSS(:target 之外的方案需要脚本,
+    # 但这里用 data 属性 + public.js 渐进增强, 没脚本时至少第一张能看)。
+    _gallery: list[tuple[str, str]] = []
+    _main_cover = safe_url(album.get("cover"))
+    if _main_cover:
+        _gallery.append((_main_cover, str(album.get("title") or "") + " 封面"))
+    for _photo in album.get("photos") or []:
+        if not isinstance(_photo, Mapping):
+            continue
+        _photo_url = safe_url(_photo.get("url"))
+        if not _photo_url:
+            continue
+        _gallery.append((_photo_url, str(_photo.get("note") or "") or "附图"))
+    if len(_gallery) > 1:
+        _frames = []
+        for _i, (_src, _alt) in enumerate(_gallery):
+            _frames.append(
+                '<img class="detail-cover-img{}" src="{}" alt="{}"'
+                ' data-cover-frame="{}"{} referrerpolicy="no-referrer">'.format(
+                    "" if _i == 0 else " is-hidden", esc(_src), esc(_alt),
+                    _i, "" if _i == 0 else " hidden"))
+        _dots = "".join(
+            '<button type="button" class="cover-dot{}" data-cover-goto="{}"'
+            ' aria-label="看第 {} 张"></button>'.format(
+                " is-active" if _i == 0 else "", _i, _i + 1)
+            for _i in range(len(_gallery)))
+        _gallery_html = (
+            '<div class="detail-cover detail-gallery" data-cover-gallery="1">'
+            '<div class="detail-gallery-stack">' + "".join(_frames) + "</div>"
+            '<button type="button" class="cover-switch" data-cover-next="1"'
+            ' title="看下一张封面" aria-label="看下一张封面">'
+            '<span class="cover-switch-count" data-cover-count="1">1/{}'
+            "</span></button>"
+            '<div class="cover-dots">' + _dots + "</div>"
+            "</div>"
+        ).format(len(_gallery))
+    else:
+        # 没有主封面、只有附图时: 直接显示第一张附图(否则用户永远看不到它)
+        if _gallery and not _main_cover:
+            _gallery_html = '<div class="detail-cover">{}'.format(
+                '<img class="detail-cover-img" src="{}" alt="{}"'
+                ' referrerpolicy="no-referrer">'.format(
+                    esc(_gallery[0][0]), esc(_gallery[0][1])))
+        elif _gallery:
+            _gallery_html = '<div class="detail-cover">{}</div>'.format(
+                cover_html(album, size="detail", lazy=False))
+        else:
+            _gallery_html = '<div class="detail-cover">{}</div>'.format(
+                cover_html(album, size="detail", lazy=False))
     body = f"""<div class="detail-wrap">
 <div class="detail">
-  <div class="detail-cover">{cover_html(album, size="detail", lazy=False)}</div>
+  {_gallery_html}
   <div class="detail-info">
     <div class="detail-head">
       <h2 class="detail-title">{esc(title)}</h2>
@@ -4883,6 +4940,12 @@ def edit_values_from_album(album: Any) -> dict[str, Any]:
       "price": str(_attr(album, "price", default="") or ""),
       "booth": str(_attr(album, "booth", default="") or ""),
       "hall": str(_attr(album, "hall", default="") or ""),
+      # 用户 m16568: 原作 IP / 制作人 / 发布平台 / 出品类型 / 各碟名字
+      "original_work": str(_attr(album, "original_work", default="") or ""),
+      "producer": str(_attr(album, "producer", default="") or ""),
+      "platform": str(_attr(album, "platform", default="") or ""),
+      "release_kind": str(_attr(album, "release_kind", default="") or ""),
+      "discs": dict(_attr(album, "discs", default={}) or {}),
       "tags": "、".join(_text_list(_attr(album, "tags", default=[]))),
       "genres": "、".join(_text_list(_attr(album, "genres", default=[]))),
       "description": str(_attr(album, "description", default="") or ""),
@@ -5290,12 +5353,14 @@ def edit_album_page(
     append_checked = " checked" if track_mode == "append" else ""
     paste_html = (
         '<details class="trk-paste"' + (" open" if paste_text else "") + ">"
-        "<summary>从别处整段粘贴曲目(自动识别 曲名 / 艺人 / 时长)</summary>"
+        # 用户 m16568: 文案去掉「从别处」, 改成「粘贴文本识别曲目表」——
+        # 这个框的用途是把自己手上的曲目表粘进来识别, 不是「从别处搬」。
+        "<summary>粘贴文本识别曲目表(自动识别 曲名 / 艺人 / 时长 / 分碟)</summary>"
         '<div class="trk-paste-body">'
         '<label class="field auth-field"><span>粘贴内容'
-        '<span class="field-hint">每行一首, 识别不出的行会被忽略</span></span>'
+        '<span class="field-hint">每行一首; Disc/CD/碟 行会切成新的碟, 识别不出的行会被忽略</span></span>'
         '<textarea name="track_paste" rows="6" spellcheck="false" '
-        'placeholder="01. 曲名 - 艺人 4:12&#10;02. 曲名 / 艺人&#10;Tr.3 曲名 4分12秒">'
+        'placeholder="01. 曲名 - 艺人 4:12&#10;02. 曲名 / 艺人&#10;Disc 2&#10;01. 第二碟第一首">'
         f"{esc(paste_text)}</textarea>"
         "</label>"
         '<div class="trk-paste-modes">'
@@ -5328,11 +5393,11 @@ def edit_album_page(
     credit_paste_html = (
         '<details class="trk-paste credit-paste"'
         + (" open" if credit_paste_text else "") + ">"
-        "<summary>从别处整段粘贴制作人员(自动识别 职责 / 名字)</summary>"
+        "<summary>粘贴文本识别制作人员(自动识别 职责 / 名字)</summary>"
         '<div class="trk-paste-body">'
         '<label class="field auth-field"><span>粘贴内容'
         '<span class="field-hint">每行一条「职责: 名字」; '
-        "括号里的链接会被忽略, 多个名字用、或 / 分隔</span></span>"
+        "括号里的链接与 @用户名 会被忽略, 多个名字用、或 / 分隔</span></span>"
         '<textarea name="credit_paste" rows="6" spellcheck="false" '
         'placeholder="制作: 甲&#10;作曲: 甲 / 乙&#10;插画: 丙 (https://example.com/p)">'
         f"{esc(credit_paste_text)}</textarea>"
@@ -5363,18 +5428,28 @@ def edit_album_page(
         _disc_groups.setdefault(_disc_no, []).append(_row)
     if not _disc_groups:
         _disc_groups = {1: []}
+    # 用户 m16568: 每碟可以单独命名(如 Disc 2『Nightmare』)。名字作为
+    # ``disc_name_<碟号>`` 字段提交, 命名后详情页显示在碟头, 也能按这个名字
+    # 搜到整张专辑 —— 流媒体上两碟常以不同名字分别发行。
+    _disc_names = values.get("discs") if isinstance(values.get("discs"), Mapping) else {}
     disc_blocks: list[str] = []
     for _disc_no in sorted(_disc_groups):
         _rows_html = []
         for _pos, _row in enumerate(_disc_groups[_disc_no], 1):
             _rows_html.append(_track_row_html(_row, _disc_no, _pos))
+        _disc_name = str(_disc_names.get(str(_disc_no)) or "")
         disc_blocks.append(
             '<section class="disc-block" data-disc="{}">'
             '<div class="disc-head">'
             '<span class="disc-title">Disc {}</span>'
+            '<input type="text" class="disc-name-input" name="disc_name_{}"'
+            ' value="{}" placeholder="这一碟的名字(可留空)"'
+            ' aria-label="Disc {} 的名字">'
             '<span class="disc-tools">'
-            '<button type="button" class="btn-ghost btn-xs" data-disc-renumber="1"'
-            ' title="按当前顺序重排音轨号">调整曲轨符</button>'
+            '<button type="button" class="btn-ghost btn-xs" data-disc-move="-1"'
+            ' title="与上一张碟交换位置">↑ 上移</button>'
+            '<button type="button" class="btn-ghost btn-xs" data-disc-move="1"'
+            ' title="与下一张碟交换位置">↓ 下移</button>'
             '<button type="button" class="btn-ghost btn-xs" data-disc-remove="1"'
             ' title="删除整张碟">删除光盘</button>'
             "</span>"
@@ -5393,6 +5468,7 @@ def edit_album_page(
             ' data-track-add="1">＋ 添加专辑歌曲</button></div>'
             "</section>".format(
                 _disc_no, "{:02d}".format(_disc_no), _disc_no,
+                esc(_disc_name), _disc_no, _disc_no,
                 "".join(_rows_html),
                 "" if _rows_html else "",
             )
@@ -5592,19 +5668,56 @@ def edit_album_page(
         "封面 & 标题",
         "edit-card-cover",
     )
-    _cards["info"] = _card(
-        "info",
-        '<div class="form-grid">'
-        + _bind("circle", "社团/制作人", "circle")
-        + _text_input(values, errs, "company", "发行公司", hint="留空则同上")
-        + _bind("event", "展会", "event", suggest_all=True)
+    # 用户 m16568: 出品信息分两种卡片 ——
+    #   同人展侧(event): 社团即发行方(不再单列「发行公司」), 第二个出品人框改「制作人」,
+    #                    保留 展会 / 品番 / 价格 / 展馆 / 展位。
+    #   独立同人侧(indie): 去掉 展会 / 品番 / 价格 / 展馆 / 展位, 改「发布平台」。
+    # 两套用同一批字段(company 只在 event 侧出现, platform 只在 indie 侧出现),
+    # 切换靠 release_kind 单选 + JS 显隐; 没脚本时两组都显示(仍可正常保存)。
+    # 原作(original_work)两侧都要 —— 东方 / 蔚蓝档案 / 原神 这类 IP。
+    _release_kind = str(values.get("release_kind") or "").strip().lower()
+    if _release_kind not in ("event", "indie"):
+        # 没选过: 有展会就算同人展侧, 否则算独立侧(仅影响默认选中项)
+        _release_kind = "event" if str(values.get("event") or "").strip() else "indie"
+    _kind_radio = (
+        '<div class="release-kind" data-release-kind-pick="1">'
+        '<label class="release-kind-opt"><input type="radio" name="release_kind"'
+        ' value="event"{}> 同人展侧</label>'
+        '<label class="release-kind-opt"><input type="radio" name="release_kind"'
+        ' value="indie"{}> 独立同人侧</label>'
+        "</div>"
+    ).format(" checked" if _release_kind == "event" else "",
+             " checked" if _release_kind == "indie" else "")
+    _info_shared = (
+        _bind("circle", "社团 / 出品方", "circle")
+        + _text_input(values, errs, "producer", "制作人", hint="个人名义出品时填这里")
+        + _text_input(values, errs, "original_work", "原作",
+                      hint="东方 / 蔚蓝档案 / 原神 这类 IP, 原创留空")
         + _text_input(values, errs, "release_date", "发售日",
                       kind="date", hint="选展会后自动填入")
+    )
+    _info_event = (
+        '<div class="info-group" data-release-kind="event"{}>'.format(
+            "" if _release_kind == "event" else " hidden")
+        + _bind("event", "展会", "event", suggest_all=True)
         + _text_input(values, errs, "catalog_no", "品番")
         + _text_input(values, errs, "price", "价格")
         + _text_input(values, errs, "hall", "展馆")
         + _text_input(values, errs, "booth", "展位")
-        + "</div>",
+        + "</div>"
+    )
+    _info_indie = (
+        '<div class="info-group" data-release-kind="indie"{}>'.format(
+            "" if _release_kind == "indie" else " hidden")
+        + _text_input(values, errs, "platform", "发布平台",
+                      hint="BOOTH / Bandcamp / Steam 等, 展会碟留空")
+        + "</div>"
+    )
+    _cards["info"] = _card(
+        "info",
+        _kind_radio
+        + '<div class="form-grid">' + _info_shared + "</div>"
+        + '<div class="form-grid">' + _info_event + _info_indie + "</div>",
         "出品信息",
         "edit-card-info",
     )
