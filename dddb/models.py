@@ -540,6 +540,23 @@ class Album:
     #: 否则你手工改对的标题/社团, 会在下一次采集时被第三方来源改回去。
     edited: bool = False
 
+    # -- 用户 m16568 新增 ----------------------------------------------------
+    #: 各碟的名字(``{"1": "Nightmare", "2": "..."}``)。键是碟号字符串,
+    #: 值是这一碟的名字; 没命名的碟不出现在这里。
+    #: 用途: ① 详情页碟头显示; ② 被命名后能按这个名字搜到整张专辑
+    #: (流媒体上两碟常以不同名字分别发行)。
+    discs: dict[str, str] = field(default_factory=dict)
+    #: 原作 IP(东方 / 蔚蓝档案 / 原神 …)。同人作品多半依附某个 IP,
+    #: 单列出来比塞进 tags 更好搜。
+    original_work: str = ""
+    #: 制作人(同人展侧的第二个出品人字段, 与社团分开记)。
+    producer: str = ""
+    #: 发布平台(独立同人侧用: BOOTH / Bandcamp / Steam …)。
+    platform: str = ""
+    #: 出品类型: ``event``(同人展侧) / ``indie``(独立同人侧) / 空(未区分)。
+    #: 编辑页据此切换「出品信息」卡片的两套字段。
+    release_kind: str = ""
+
     def __post_init__(self) -> None:
         self.title = _clean_str(self.title)
         self.title_original = _clean_str(self.title_original)
@@ -551,6 +568,23 @@ class Album:
         self.company = _clean_str(self.company)
         self.booth = _clean_str(self.booth)
         self.hall = _clean_str(self.hall)
+        self.original_work = _clean_str(self.original_work)
+        self.producer = _clean_str(self.producer)
+        self.platform = _clean_str(self.platform)
+        self.release_kind = _clean_str(self.release_kind).lower()
+        if self.release_kind not in ("", "event", "indie"):
+            self.release_kind = ""
+        # 碟名: 键统一成字符串碟号, 值去空白, 空值丢掉
+        cleaned_discs: dict[str, str] = {}
+        for raw_key, raw_name in (self.discs or {}).items():
+            try:
+                number = int(str(raw_key).strip())
+            except (TypeError, ValueError):
+                continue
+            name = _clean_str(raw_name)
+            if number > 0 and name:
+                cleaned_discs[str(number)] = name
+        self.discs = cleaned_discs
         self.release_date = _clean_str(self.release_date)
         self.cover_url = _clean_str(self.cover_url)
         self.cover_local = _clean_str(self.cover_local)
@@ -735,6 +769,11 @@ class Album:
             "trust_by_source": {str(k): int(v) for k, v in (self.trust_by_source or {}).items()},
             "booth": self.booth,
             "hall": self.hall,
+            "discs": dict(self.discs),
+            "original_work": self.original_work,
+            "producer": self.producer,
+            "platform": self.platform,
+            "release_kind": self.release_kind,
             "edited": bool(self.edited),
         }
 
@@ -773,6 +812,11 @@ class Album:
             trust_by_source={str(k): int(v) for k, v in (data.get("trust_by_source") or {}).items()},
             booth=str(data.get("booth") or ""),
             hall=str(data.get("hall") or ""),
+            discs=dict(data.get("discs") or {}),
+            original_work=_clean_str(data.get("original_work")),
+            producer=_clean_str(data.get("producer")),
+            platform=_clean_str(data.get("platform")),
+            release_kind=_clean_str(data.get("release_kind")),
             edited=bool(data.get("edited")),
         )
 
