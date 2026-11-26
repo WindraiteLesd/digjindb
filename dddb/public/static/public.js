@@ -2806,6 +2806,533 @@
   }
 
   /* ==========================================================================
+     整段粘贴: 只在前端解析并填进下面的表格(暂存), 不提交表单(用户 m16094)
+     ---------------------------------------------------------------------------
+     曲目粘贴 / 制作人员粘贴两个折叠框都走这一套:
+       点按钮 -> 解析 textarea -> 填进下方曲目表 / 词条行 -> 提示"还没保存"
+     真正的写库仍然只发生在用户点最下面那个「保存」时。
+
+     解析规则与 dddb/trackparse.py、dddb/creditparse.py 一一对应(含全角归一、
+     轨号前缀、括号时长、制表符表格、跳过表头/碟号/注释; 词条先剥掉括号里的
+     链接再按**最后一个**冒号切职责)。服务端那两条老链路仍然在 —— 表单照常
+     提交时服务端会再解析一遍, 所以 JS 没跑起来也不会丢数据。
+     ========================================================================== */
+  function fireEvent(el, type) {
+    if (!el || !el.dispatchEvent) { return; }
+    el.dispatchEvent(new Event(type, { bubbles: true }));
+  }
+
+  /* 全角 -> 半角 + 各种空白归一(与 trackparse._norm 同表) */
+  function normPasteText(text) {
+    return String(text == null ? "" : text)
+      .replace(/[\uFF01-\uFF5E]/g, function (ch) {
+        return String.fromCharCode(ch.charCodeAt(0) - 0xFEE0);
+      })
+      .replace(/[\u3000\u00A0\u2002-\u200A\u202F\u205F]/g, " ")
+      .replace(/[\u200B-\u200D\u2060\uFEFF]/g, "");
+  }
+
+  function tidyPasteText(text) {
+    return normPasteText(text).replace(/\s+/g, " ").trim();
+  }
+
+  var DUR_BODY = "(?:\\d{1,3}:\\d{2}(?::\\d{2})?|\\d{1,3}分\\d{1,2}秒|\\d{1,3}秒)";
+  var RE_DUR_BRACKET = new RegExp("[([【]\\s*(" + DUR_BODY + ")\\s*[)\\]】]", "g");
+  var RE_TRAIL_DUR = new RegExp("^(.*\\S)[ \\t]+(" + DUR_BODY + ")[ \\t]*$");
+  var RE_TRAIL_SEC = /^(.*\S)[ \t]+(\d{2,5})[ \t]*$/;
+  var RE_SEP_ANY = /\s+\/\s+|\s+[-–—]\s+/;
+  var RE_DUR_FULL = new RegExp("^(?:" + DUR_BODY + "|\\d+)$");
+  var RE_COLON_DUR = /^(\d{1,3}):(\d{2})(?::(\d{2}))?$/;
+  var RE_MIN_SEC = /^(\d{1,3})分(\d{1,2})秒$/;
+  var RE_SEC = /^(\d{1,3})秒$/;
+  var BRACKET_PAIRS = [["[", "]"], ["(", ")"], ["【", "】"], ["{", "}"], ["〈", "〉"]];
+
+  function parsePasteDuration(text) {
+    var value = normPasteText(text).trim();
+    if (!value) { return null; }
+    for (var i = 0; i < BRACKET_PAIRS.length; i++) {
+      var open = BRACKET_PAIRS[i][0], close = BRACKET_PAIRS[i][1];
+      if (value.length >= 2 && value.charAt(0) === open
+          && value.charAt(value.length - 1) === close) {
+        value = value.slice(1, -1).trim();
+        break;
+      }
+    }
+    if (!RE_DUR_FULL.test(value)) { return null; }
+    var m = RE_COLON_DUR.exec(value);
+    if (m) {
+      var a = parseInt(m[1], 10), b = parseInt(m[2], 10);
+      return m[3] ? a * 3600 + b * 60 + parseInt(m[3], 10) : a * 60 + b;
+    }
+    m = RE_MIN_SEC.exec(value);
+    if (m) { return parseInt(m[1], 10) * 60 + parseInt(m[2], 10); }
+    m = RE_SEC.exec(value);
+    if (m) { return parseInt(m[1], 10); }
+    var bare = parseInt(value, 10);
+    return (bare > 0 && bare <= 86399) ? bare : null;
+  }
+
+  function formatPasteDuration(seconds) {
+    var total = Number(seconds);
+    if (!isFinite(total) || total < 0) { return ""; }
+    total = Math.floor(total);
+    var hours = Math.floor(total / 3600);
+    var mins = Math.floor((total % 3600) / 60);
+    var secs = total % 60;
+    var pad = function (n) { return (n < 10 ? "0" : "") + n; };
+    return hours ? hours + ":" + pad(mins) + ":" + pad(secs) : mins + ":" + pad(secs);
+  }
+
+  var HEADER_EXACT = {};
+  ("曲目 曲目表 曲目列表 曲目清单 曲名 曲名リスト 标题 標題 歌曲 歌曲列表 収録曲 " +
+   "收録曲 收录曲 收录曲目 トラックリスト トラック 番号 タイトル 時間 时长 " +
+   "アーティスト アーティスト名 歌手 艺人 tracklist tracks songs tracklisting songlist"
+  ).split(" ").forEach(function (word) { HEADER_EXACT[word.toLowerCase()] = true; });
+
+  var COLUMN_WORDS = {};
+  Object.keys(HEADER_EXACT).forEach(function (key) { COLUMN_WORDS[key] = true; });
+  ("# no no. tr tr. track number title name time length duration artist artists song " +
+   "disc disk cd 曲 作曲 作詞 作词 編曲 编曲 演唱 演奏 初出 原曲 时长 碟"
+  ).split(" ").forEach(function (word) { COLUMN_WORDS[word.toLowerCase()] = true; });
+
+  var RE_HEADER_SEP = /[\s#.,:;|/\-–—()\[\]{}「」【】『』、]+/g;
+  var RE_PIECE_SPLIT = /[\s|/\-–—]+/;
+  var RE_SPLIT_TA = /\s+\/\s+|\s+[-–—]\s+/;
+  var RE_ARTIST_SPLIT = /\s*\/\s*|\s*[、,，;；]\s*/;
+  var RE_CELL_ARTIST_SPLIT = /\s*\/\s*|[,，、;；]\s*/;
+  var RE_BARE_INDEX = /^(?:(?:tr|trk|track|no|number|#)\s*[.:、)]?\s*)?(\d{1,3})[.,、)]?$/i;
+  var RE_BULLET = /^(?:[・•·‣■□●○◆◇★☆]|[*+]\s*|[-–—]\s+)/;
+  var RE_COMMENT = /^(?:#(?!\s*\d)|\/\/|;|※|>\s)/;
+  var RE_DISC_LINE = /^(?:disc|disk|cd|vol\.?|volume|ディスク|碟)[ \t]*[-–—]?[ \t]*\d+$/i;
+  var RE_RULE_LINE = /^[-=_*~·—–\s]{3,}$/;
+  var RE_INDEX_HEAD = new RegExp(
+    "^((?:(?:tr|trk|track|no|number)\\s*[.:、)\\]]?\\s*|#\\s*)(\\d{1,3})" +
+    "|(\\d{1,3})\\s*[.,、)]\\s*(?!\\d)" +
+    "|(\\d{1,3})[ \\t]+" +
+    "|(0\\d{1,2})(?=[^\\d\\s:.,)\\]|\\-])" +
+    "|(\\d{1,3})(?=[^\\d\\s:.,)\\]|\\-]))", "i");
+
+  function splitPasteTitleArtists(text) {
+    var body = tidyPasteText(text);
+    var match = RE_SPLIT_TA.exec(body);
+    if (!match) { return [body, []]; }
+    var title = body.slice(0, match.index).trim();
+    var rest = body.slice(match.index + match[0].length).trim();
+    if (!title || !rest) { return [body, []]; }
+    var artists = rest.split(RE_ARTIST_SPLIT).map(function (one) {
+      return one.trim();
+    }).filter(function (one) { return !!one; });
+    return [title, artists];
+  }
+
+  function isPasteHeaderLine(line) {
+    var token = line.replace(RE_HEADER_SEP, "").toLowerCase();
+    if (HEADER_EXACT[token]) { return true; }
+    var pieces = line.split(RE_PIECE_SPLIT);
+    if (pieces.length < 2) { return false; }
+    return pieces.every(function (piece) {
+      return !!COLUMN_WORDS[piece.replace(RE_HEADER_SEP, "").toLowerCase()];
+    });
+  }
+
+  /* 剥出**第一个**括号时长; 返回 [剩余文本, 秒数或 null] */
+  function extractPasteDurations(text) {
+    var found = null;
+    RE_DUR_BRACKET.lastIndex = 0;
+    var match = RE_DUR_BRACKET.exec(text);
+    if (match) {
+      found = parsePasteDuration(match[1]);
+      if (found === null) { found = null; }
+    }
+    return [text.replace(RE_DUR_BRACKET, " "), found];
+  }
+
+  function parsePasteTable(cells, duration) {
+    var rest = cells.slice();
+    var number = null;
+    if (rest.length >= 2) {
+      var head = RE_BARE_INDEX.exec(rest[0]);
+      if (head) {
+        number = parseInt(head[1], 10);
+        rest = rest.slice(1);
+      }
+    }
+    if (duration == null) {
+      for (var i = rest.length - 1; i >= 0; i--) {
+        var found = parsePasteDuration(rest[i]);
+        if (found !== null) {
+          duration = found;
+          rest.splice(i, 1);
+          break;
+        }
+      }
+    }
+    var title = "", artists = [];
+    if (rest.length) {
+      var headCell = rest[0];
+      rest = rest.slice(1);
+      var inner = extractPasteDurations(headCell);
+      headCell = inner[0];
+      if (duration == null) { duration = inner[1]; }
+      var pair = splitPasteTitleArtists(headCell);
+      title = pair[0];
+      artists = pair[1].slice();
+    }
+    rest.forEach(function (cell) {
+      cell.split(RE_CELL_ARTIST_SPLIT).forEach(function (one) {
+        if (one.trim()) { artists.push(one.trim()); }
+      });
+    });
+    return {
+      raw: "", duration: duration, number: number,
+      weak: false, title: title, artists: artists,
+      altTitle: "", altArtists: []
+    };
+  }
+
+  /* 解析一行(已归一化); 返回 null 表示这行不是曲目 */
+  function scanPasteLine(normalized, raw) {
+    if (!normalized || RE_RULE_LINE.test(normalized)) { return null; }
+    var body = normalized.replace(RE_BULLET, "").trim();
+    if (!body) { return null; }
+    if (RE_COMMENT.test(body) || RE_DISC_LINE.test(body)) { return null; }
+    if (isPasteHeaderLine(body)) { return null; }
+
+    var extracted = extractPasteDurations(body);
+    body = extracted[0].trim();
+    var duration = extracted[1];
+    if (!body) { return null; }
+    if (parsePasteDuration(body) !== null) { return null; }
+    if (duration == null) {
+      var trail = RE_TRAIL_DUR.exec(body);
+      if (trail) {
+        body = trail[1].trim();
+        duration = parsePasteDuration(trail[2]);
+      }
+    }
+    if (!duration) { duration = null; }
+    if (!body) { return null; }
+
+    if (body.indexOf("\t") !== -1) {
+      var cells = body.split("\t").map(function (cell) { return cell.trim(); })
+        .filter(function (cell) { return !!cell; });
+      if (cells.length >= 2) {
+        var tabled = parsePasteTable(cells, duration);
+        tabled.raw = raw;
+        return tabled.title ? tabled : null;
+      }
+    }
+
+    var number = null, weak = false, whole = body;
+    var head = RE_INDEX_HEAD.exec(body);
+    if (head) {
+      number = parseInt(head[2] || head[3] || head[4] || head[5] || head[6], 10);
+      weak = !head[5] && !!head[6];
+      body = body.slice(head[0].length).trim();
+      body = body.replace(/^[-–—][ \t]*/, "").trim();
+      if (!body || parsePasteDuration(body) !== null) { return null; }
+    }
+
+    var secMatch = RE_TRAIL_SEC.exec(body);
+    if (secMatch && duration == null && RE_SEP_ANY.test(secMatch[1])) {
+      var secs = parseInt(secMatch[2], 10);
+      if (secs >= 20 && secs <= 7200) {
+        body = secMatch[1].trim();
+        duration = secs;
+      }
+    }
+
+    var split = splitPasteTitleArtists(body);
+    var pending = {
+      raw: raw, duration: duration, number: number, weak: weak,
+      title: split[0], artists: split[1], altTitle: "", altArtists: []
+    };
+    if (weak) {
+      var alt = splitPasteTitleArtists(whole);
+      pending.altTitle = alt[0];
+      pending.altArtists = alt[1];
+    }
+    if (!pending.title && !pending.altTitle) { return null; }
+    return pending;
+  }
+
+  function parsePasteTracks(text) {
+    var source = String(text == null ? "" : text);
+    var pending = [];
+    source.split(/\r\n|\r|\n/).forEach(function (line) {
+      var normalized = normPasteText(line).trim();
+      var item = scanPasteLine(normalized, line.trim());
+      if (item) { pending.push(item); }
+    });
+    var tracks = [];
+    pending.forEach(function (item, position) {
+      var number = item.number, title, artists;
+      if (item.weak && number !== position + 1) {
+        title = item.altTitle;
+        artists = item.altArtists.slice();
+      } else {
+        title = item.title;
+        artists = item.artists.slice();
+      }
+      if (!title) { return; }
+      tracks.push({
+        index: tracks.length + 1, title: title, artists: artists,
+        duration: item.duration
+      });
+    });
+    return tracks;
+  }
+
+  /* --- 制作人员: 规则同 dddb/creditparse.py --- */
+  var RE_CREDIT_PAREN = /[(（][^()（）]*[)）]/g;
+  var RE_CREDIT_URL = /https?:\/\/\S+/g;
+  var RE_CREDIT_COLON = /[:：]/g;
+  var RE_CREDIT_NAME_SPLIT = /\s*[/、,，;；]\s*/;
+  var RE_CREDIT_BULLET = /^\s*(?:[-*·•]|\d+\s*[.、)）])\s*/;
+  var CREDIT_HEADER_WORDS = {};
+  ("职责 职位 角色 担当 人员 名字 姓名 staff credit credits role roles name names"
+  ).split(" ").forEach(function (word) { CREDIT_HEADER_WORDS[word.toLowerCase()] = true; });
+
+  function stripCreditLinks(text) {
+    var value = String(text == null ? "" : text);
+    for (var round = 0; round < 4; round++) {
+      var next = value.replace(RE_CREDIT_PAREN, " ");
+      if (next === value) { break; }
+      value = next;
+    }
+    return value.replace(RE_CREDIT_URL, " ").replace(/\s+/g, " ").trim();
+  }
+
+  function isCreditHeaderLine(line) {
+    var bare = line.replace(RE_CREDIT_BULLET, "");
+    var pieces = bare.split(/\s*[/、,，;；:：]\s*/);
+    if (!pieces.length) { return false; }
+    return pieces.every(function (piece) {
+      return !!CREDIT_HEADER_WORDS[piece.toLowerCase()];
+    });
+  }
+
+  function parsePasteCredits(text) {
+    var source = String(text == null ? "" : text);
+    var out = [];
+    var seen = {};
+    source.split(/\r\n|\r|\n/).forEach(function (rawLine) {
+      var line = String(rawLine).replace(RE_CREDIT_BULLET, "").trim();
+      if (!line) { return; }
+      if (isCreditHeaderLine(line)) { return; }
+      RE_CREDIT_COLON.lastIndex = 0;
+      if (!RE_CREDIT_COLON.test(line)) { return; }
+      //: 先剥掉括号里的链接再找冒号, 否则最后一个冒号会是 "https:" 里的
+      line = stripCreditLinks(line);
+      if (!line) { return; }
+      var cut = -1;
+      RE_CREDIT_COLON.lastIndex = 0;
+      var scan;
+      while ((scan = RE_CREDIT_COLON.exec(line)) !== null) { cut = scan.index; }
+      if (cut <= 0) { return; }
+      var role = line.slice(0, cut).trim();
+      var rest = line.slice(cut + 1).trim();
+      if (!role || !rest) { return; }
+      rest.split(RE_CREDIT_NAME_SPLIT).forEach(function (name) {
+        var person = name.trim();
+        if (!person) { return; }
+        var token = role + "\u0000" + person;
+        if (seen[token]) { return; }
+        seen[token] = true;
+        out.push({ role: role, name: person });
+      });
+    });
+    return out;
+  }
+
+  /* 把 [(name)] 按职责并成 [ {role, names: [...]} ], 保持首次出现顺序 */
+  function groupPasteCredits(list) {
+    var order = [], map = {};
+    list.forEach(function (item) {
+      var key = item.role;
+      if (!map[key]) { map[key] = { role: key, names: [] }; order.push(key); }
+      map[key].names.push(item.name);
+    });
+    return order.map(function (key) { return map[key]; });
+  }
+
+  /* --- 填表: 曲目 --- */
+  function putTrackCell(row, name, value) {
+    var input = row.querySelector('[name="' + name + '"]');
+    if (!input) { return; }
+    input.value = value == null ? "" : String(value);
+    fireEvent(input, "input");
+    fireEvent(input, "change");
+  }
+
+  function fillPastedTracks(tracks, mode) {
+    var host = document.getElementById("track-rows");
+    if (!host || !tracks.length) { return 0; }
+    var blocks = Array.prototype.slice.call(host.querySelectorAll(".disc-block"));
+    if (!blocks.length) { return 0; }
+
+    if (mode === "append") {
+      var lastBlock = blocks[blocks.length - 1];
+      var lastBody = discBody(lastBlock);
+      if (!lastBody) { return 0; }
+      var discNo = discNumber(lastBlock);
+      tracks.forEach(function (track) {
+        var count = lastBody.querySelectorAll("tr.track-row").length;
+        var row = buildTrackRow(discNo, count + 1);
+        lastBody.appendChild(row);
+        putTrackCell(row, "track_title", track.title);
+        putTrackCell(row, "track_artists", (track.artists || []).join("、"));
+        putTrackCell(row, "track_duration", formatPasteDuration(track.duration));
+      });
+      renumberDisc(lastBlock);
+      return tracks.length;
+    }
+
+    // replace: 清空所有碟的曲目行, 全部落到第 1 张碟(粘贴里没有碟信息)
+    blocks.forEach(function (block) {
+      var body = discBody(block);
+      if (body) { body.innerHTML = ""; }
+    });
+    var first = blocks[0];
+    var firstBody = discBody(first);
+    if (!firstBody) { return 0; }
+    var firstDisc = discNumber(first);
+    tracks.forEach(function (track, i) {
+      var row = buildTrackRow(firstDisc, i + 1);
+      firstBody.appendChild(row);
+      putTrackCell(row, "track_title", track.title);
+      putTrackCell(row, "track_artists", (track.artists || []).join("、"));
+      putTrackCell(row, "track_duration", formatPasteDuration(track.duration));
+    });
+    blocks.forEach(renumberDisc);
+    return tracks.length;
+  }
+
+  /* --- 填表: 制作人员 --- */
+  function fillPastedCredits(groups, mode) {
+    var card = document.querySelector('[data-card="credits"]');
+    if (!card || !groups.length) { return 0; }
+    var add = card.querySelector('[data-pair-add="credit"]');
+    var rowsHost = card.querySelector(".rows");
+    if (!add || !rowsHost) { return 0; }
+
+    var rows = Array.prototype.slice.call(
+      rowsHost.querySelectorAll('[data-pair-row="credit"]'));
+    if (mode !== "append") {
+      rows.forEach(function (row) {
+        if (row.parentNode) { row.parentNode.removeChild(row); }
+      });
+      rows = [];
+    }
+
+    groups.forEach(function (group) {
+      // 追加模式先复用"职责空 + 没有人员"的旧空行, 免得每次粘贴都堆一行空的
+      var row = null;
+      for (var i = 0; i < rows.length; i++) {
+        var roleInput = rows[i].querySelector('input[name="credit_role"]');
+        var chips = rows[i].querySelectorAll(".credit-person-chip");
+        if (!chips.length && (!roleInput || !String(roleInput.value).trim())) {
+          row = rows[i];
+          break;
+        }
+      }
+      if (!row) {
+        // 走页面自己的「＋ 添加词条」, 新行结构才不会和已有行不一致
+        var before = rowsHost.querySelectorAll('[data-pair-row="credit"]').length;
+        add.click();
+        var all = rowsHost.querySelectorAll('[data-pair-row="credit"]');
+        if (all.length <= before) { return; }
+        row = all[all.length - 1];
+        rows.push(row);
+      }
+      var role = row.querySelector('input[name="credit_role"]');
+      if (role) {
+        role.value = group.role;
+        fireEvent(role, "input");
+        fireEvent(role, "change");
+      }
+      var input = row.querySelector(".credit-person-input");
+      if (!input) { return; }
+      group.names.forEach(function (name) {
+        input.value = name;
+        // 走用户手动回车加入的那条路径(chip 与隐藏域都由它维护)
+        input.dispatchEvent(new KeyboardEvent("keydown", {
+          key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true
+        }));
+      });
+      input.value = "";
+    });
+    return groups.length;
+  }
+
+  function pasteHint(box, text) {
+    if (!box) { return; }
+    var hint = box.querySelector(".trk-paste-hint");
+    if (!hint) { return; }
+    hint.textContent = text;
+  }
+
+  function readPasteMode(box, name) {
+    var picked = box.querySelector('input[name="' + name + '"]:checked');
+    var value = picked ? picked.value : "replace";
+    return value === "append" ? "append" : "replace";
+  }
+
+  function setupPasteFill() {
+    document.addEventListener("click", function (e) {
+      var target = e.target;
+      if (!target || !target.closest) { return; }
+
+      var trackBtn = target.closest('[data-track-apply="1"]');
+      if (trackBtn) {
+        e.preventDefault();                 // 绝对不提交表单
+        var trackBox = trackBtn.closest(".trk-paste");
+        var trackArea = trackBox
+          ? trackBox.querySelector('textarea[name="track_paste"]') : null;
+        if (!trackBox || !trackArea) { return; }
+        var tracks = parsePasteTracks(trackArea.value);
+        var trackMode = readPasteMode(trackBox, "track_mode");
+        if (!tracks.length) {
+          pasteHint(trackBox, "这段内容里没识别出曲目; 下面的曲目表保持原样。");
+          return;
+        }
+        var filled = fillPastedTracks(tracks, trackMode);
+        if (!filled) {
+          pasteHint(trackBox, "识别出 " + tracks.length + " 首, 但页面上找不到曲目表。");
+          return;
+        }
+        pasteHint(trackBox, "已把 " + filled + " 首"
+          + (trackMode === "append" ? "追加" : "填")
+          + "进下面的曲目表; 还没保存, 点最下面的「保存」才会写进库里。");
+        return;
+      }
+
+      var creditBtn = target.closest('[data-credit-apply="1"]');
+      if (!creditBtn) { return; }
+      e.preventDefault();
+      var creditBox = creditBtn.closest(".credit-paste");
+      var creditArea = creditBox
+        ? creditBox.querySelector('textarea[name="credit_paste"]') : null;
+      if (!creditBox || !creditArea) { return; }
+      var parsed = parsePasteCredits(creditArea.value);
+      var creditMode = readPasteMode(creditBox, "credit_mode");
+      if (!parsed.length) {
+        pasteHint(creditBox, "这段内容里没识别出词条; 下面的词条保持原样。");
+        return;
+      }
+      var groups = groupPasteCredits(parsed);
+      var added = fillPastedCredits(groups, creditMode);
+      if (!added) {
+        pasteHint(creditBox, "识别出 " + parsed.length + " 条, 但页面上找不到词条卡片。");
+        return;
+      }
+      pasteHint(creditBox, "已把 " + groups.length + " 行 / " + parsed.length + " 条"
+        + (creditMode === "append" ? "追加" : "填")
+        + "进下面的词条; 还没保存, 点最下面的「保存」才会写进库里。");
+    });
+  }
+
+  /* ==========================================================================
      详情页曲目表: 点击曲目展开补充信息(语种/曲风/副标题/翻译)
      默认收起, 只在有补充信息时才有展开按钮; 纯 DOM 操作, 无需刷新。
      ========================================================================== */
@@ -3075,6 +3602,8 @@
     setupTrackExpand();
     setupEventAutoDate();
     setupLinkAutoName();
+    // 整段粘贴: 只在前端解析并填进下面的表格(暂存), 写库仍归最下面的「保存」
+    setupPasteFill();
   }
 
   if (document.readyState === "loading") {
