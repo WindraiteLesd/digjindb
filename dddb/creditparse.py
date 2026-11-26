@@ -42,6 +42,11 @@ _PAREN_RE = re.compile(r"[(（][^()（）]*[)）]")
 #: 行内链接(没被括号包住的裸链接也要去掉)
 _URL_RE = re.compile(r"https?://\S+", re.I)
 
+#: 推特/X 文本里的 ``@handle``(用户 m16568: 制作人员识别要排除 @)。
+#: 只认**前面不是字母数字**的 @ —— 邮箱 ``a@b.com`` 里的 @ 不是账号名,
+#: 不该把邮箱腰斩。
+_AT_RE = re.compile(r"(?<![\w.])@[A-Za-z0-9_]{1,30}")
+
 #: 冒号: 半角/全角
 _COLON_RE = re.compile(r"[:：]")
 
@@ -59,11 +64,12 @@ _HEADER_WORDS = frozenset({
 
 
 def strip_links(text: str) -> str:
-    """去掉括号内的内容与行内裸链接, 只留名字部分.
+    """去掉括号内的内容、行内裸链接与 @用户名, 只留名字部分.
 
     ``甲 (https://x.com/a)`` -> ``甲``;
     ``甲 （说明）`` -> ``甲``;
-    ``甲 https://x.com/a`` -> ``甲``。
+    ``甲 https://x.com/a`` -> ``甲``;
+    ``甲 @someone`` -> ``甲`` (用户 m16568: 推特文本里的 @ 不是名字)。
     """
     source = str(text or "")
     # 括号可能嵌套(``甲 (a (b))``), 多轮直到稳定
@@ -73,6 +79,10 @@ def strip_links(text: str) -> str:
             break
         source = cleaned
     source = _URL_RE.sub(" ", source)
+    # 推特文本里的 ``@handle``: 不是人名, 直接丢掉(连 @ 一起)。
+    # 必须放在括号/URL 之后 —— 先剥 @ 会把 ``https://x.com/@a`` 的尾巴
+    # 变成孤儿 ``a``。
+    source = _AT_RE.sub(" ", source)
     return re.sub(r"\s+", " ", source).strip()
 
 
