@@ -103,6 +103,8 @@ _EDITABLE_FIELDS = (
     "price", "cover_url", "booth", "hall", "track_list", "urls", "credits",
     # 编辑者可在用户端**上传封面**(落到 covers/<key>.img 并回写这个字段)
     "cover_local", "cover_v",
+    # 用户 m16568: 分碟命名 / 原作 / 制作人 / 发布平台 / 出品侧别
+    "discs", "original_work", "producer", "platform", "release_kind",
 )
 
 #: 社团里允许人工改写的字段(``name`` 是主键, 单独处理 —— 改名要连带改专辑里的字符串,
@@ -2729,9 +2731,25 @@ class Store:
         for field in ("title", "title_original", "title_romaji", "circle", "release_date",
                       "catalog_no", "company", "description", "price",
                       "cover_url", "cover_local", "cover_v",
-                      "booth", "hall"):
+                      "booth", "hall",
+                      # 用户 m16568
+                      "original_work", "producer", "platform", "release_kind"):
             if field in patch:
                 setattr(album, field, as_text(patch[field]))
+        # 碟名(用户 m16568): {碟号: 名字}, 空名字不占位
+        if "discs" in patch:
+            raw_discs = patch["discs"]
+            discs: dict[str, str] = {}
+            if isinstance(raw_discs, Mapping):
+                for raw_no, raw_name in raw_discs.items():
+                    try:
+                        number = int(str(raw_no).strip())
+                    except (TypeError, ValueError):
+                        continue
+                    name = as_text(raw_name)
+                    if number > 0 and name:
+                        discs[str(number)] = name
+            album.discs = discs
         if "event" in patch:
             album.event = as_text(patch["event"])
             album.event_kind = _kind_of(album.event)
