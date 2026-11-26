@@ -578,6 +578,8 @@ _HISTORY_DIFF_FIELDS: tuple[str, ...] = (
     "release_date", "event", "catalog_no", "company", "genres", "tags",
     "description", "price", "hall", "booth", "tracks", "credits", "photos",
     "urls", "cover_url", "cover_local",
+    # 用户 m16568: 分碟命名 / 原作 / 制作人 / 发布平台 / 出品侧别
+    "discs", "original_work", "producer", "platform", "release_kind",
 )
 
 
@@ -1195,10 +1197,15 @@ def parse_album_form(
         "release_date": release_date,
         "event": _ev,  # (resale) 已归入标签, 见下方 _ev/_tags 计算
         "catalog_no": text_field(values, "catalog_no"),
-        "company": text_field(values, "company"),
+        # 用户 m16568: 发行公司输入框已去掉(同人展侧把社团与发行公司合并)。
+        # 表单不再提交这个字段, 所以只有真带了才写 —— 否则每次保存都把库里的值抹成空。
+        **({"company": text_field(values, "company")} if "company" in values else {}),
         "price": text_field(values, "price"),
         "hall": text_field(values, "hall"),
         "booth": text_field(values, "booth"),
+        "original_work": text_field(values, "original_work"),
+        "producer": text_field(values, "producer"),
+        "platform": text_field(values, "platform"),
         "tags": _tags,
         "genres": genres,
         "description": raw_field(values, "description").strip(),
@@ -1252,6 +1259,23 @@ def parse_album_form(
         # 只有**表单里根本没有曲目字段**时才不动 track_list(见上面的 _has_track_rows)。
         patch["track_list"] = tracks
 
+    # 碟名(用户 m16568): 字段名形如 ``disc_name_1`` ``disc_name_2``。
+    # 只有表单真的提交了这类字段才写, 否则保留库里的名字 —— 否则任何一次
+    # 没渲染曲目卡片的老表单都会把碟名清空。
+    _disc_fields = [name for name in values if str(name).startswith("disc_name_")]
+    if _disc_fields:
+        discs: dict[str, str] = {}
+        for field_name in _disc_fields:
+            suffix = str(field_name)[len("disc_name_"):]
+            try:
+                number = int(suffix)
+            except (TypeError, ValueError):
+                continue
+            name = text_field(values, field_name)
+            if number > 0 and name:
+                discs[str(number)] = name
+        patch["discs"] = discs
+
     return patch, errors
 
 
@@ -1299,6 +1323,16 @@ def form_display_values(values: Mapping[str, Sequence[str]]) -> dict[str, Any]:
         "price": text_field(values, "price"),
         "booth": text_field(values, "booth"),
         "hall": text_field(values, "hall"),
+        "original_work": text_field(values, "original_work"),
+        "producer": text_field(values, "producer"),
+        "platform": text_field(values, "platform"),
+        "release_kind": text_field(values, "release_kind"),
+        "discs": {
+            str(name)[len("disc_name_"):]: text_field(values, name)
+            for name in values
+            if str(name).startswith("disc_name_")
+            and text_field(values, name)
+        },
         "tags": text_field(values, "tags"),
         "genres": text_field(values, "genres"),
         "description": raw_field(values, "description"),
@@ -1328,8 +1362,11 @@ def parsed_track_items(parsed: Sequence[Any]) -> list[dict[str, Any]]:
 
     时长统一成**秒**(``None`` = 识别不出); 序号按解析顺序 1 起重排;
     空标题项直接丢掉(解析器理论上不会给, 这里兜底)。
+    碟号取自 ``ParsedTrack.disc``(用户 m16568: 粘贴文本支持分碟),
+    同一碟内的序号从 1 重新数。
     """
     items: list[dict[str, Any]] = []
+    seen: dict[int, int] = {}
     for track in parsed:
         title = str(getattr(track, "title", "") or "").strip()
         if not title:
@@ -1341,8 +1378,14 @@ def parsed_track_items(parsed: Sequence[Any]) -> list[dict[str, Any]]:
             str(name).strip() for name in (getattr(track, "artists", None) or [])
             if str(name).strip()
         ]
+        try:
+            disc = max(1, int(getattr(track, "disc", 1) or 1))
+        except (TypeError, ValueError):
+            disc = 1
+        seen[disc] = seen.get(disc, 0) + 1
         items.append({
-            "index": len(items) + 1,
+            "disc": disc,
+            "index": seen[disc],
             "title": title,
             "artists": artists,
             "duration": duration,
@@ -1368,8 +1411,36 @@ def merge_pasted_tracks(
     items = parsed_track_items(parsed)
     if not items:
         return current
-    merged = current + items if mode == "append" else items
-    return [{**item, "index": position} for position, item in enumerate(merged, 1)]
+    if mode != "append":
+        merged = items
+    else:
+        #: 追加要分两种情况(用户 m16568 要求粘贴文本支持分碟):
+        #:  * 粘贴里**只有一碟**(没写 Disc 行) -> 直接接在现有最后一碟屁股后面,
+        #:    不能凭空多出一张碟;
+        #:  * 粘贴里**有多碟** -> 整体挪到现有最大碟号之后, 免得「粘第二碟」
+        #:    把它的曲目塞进第一碟。
+        last_disc = max(
+            [int(item.get("disc") or 1) for item in current] or [0]
+        )
+        paste_discs = {int(item.get("disc") or 1) for item in items}
+        if len(paste_discs) <= 1:
+            offset = 0
+            target = max(1, last_disc or 1)
+            tail = [{**item, "disc": target} for item in items]
+        else:
+            offset = last_disc if min(paste_discs) <= last_disc else 0
+            tail = [
+                {**item, "disc": item["disc"] + offset} for item in items
+            ]
+        merged = current + tail
+    #: 序号按「碟内位置」重排(用户 m16568: 分碟后每碟都应从 1 开始)
+    counters: dict[int, int] = {}
+    out: list[dict[str, Any]] = []
+    for item in merged:
+        disc = item.get("disc") or 1
+        counters[disc] = counters.get(disc, 0) + 1
+        out.append({**item, "index": counters[disc]})
+    return out
 
 
 def normalize_track_mode(value: Any) -> str:
