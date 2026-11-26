@@ -181,7 +181,10 @@ class TestPasteBlockRender(unittest.TestCase):
 
     def test_hint_explains_link_dropping(self):
         html = self.render()
-        self.assertIn("括号里的链接会被忽略", html)
+        self.assertIn("括号里的链接", html)
+        self.assertIn("会被忽略", html)
+        # 用户 m16568: 从推特文案里粘人名时, @handle 也要一起丢掉
+        self.assertIn("@用户名", html)
         self.assertIn("点最下面的「保存」才会真正写进库里", html)
 
     def test_open_when_pasted(self):
