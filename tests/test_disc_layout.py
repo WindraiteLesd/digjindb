@@ -90,9 +90,14 @@ class TestDiscTools(unittest.TestCase):
              "duration": 100},
         ]))
 
-    def test_renumber_button(self) -> None:
-        self.assertIn('data-disc-renumber="1"', self.html)
-        self.assertIn("调整曲轨符", self.html)
+    def test_move_buttons_replace_the_old_renumber(self) -> None:
+        # 用户 m16568: 「调整曲轨符」点了只重排音轨号, 跟碟顺序无关, 换成上移/下移
+        self.assertIn('data-disc-move="-1"', self.html)
+        self.assertIn('data-disc-move="1"', self.html)
+        self.assertIn("上移", self.html)
+        self.assertIn("下移", self.html)
+        self.assertNotIn("data-disc-renumber", self.html)
+        self.assertNotIn("调整曲轨符", self.html)
 
     def test_remove_disc_button(self) -> None:
         self.assertIn('data-disc-remove="1"', self.html)
