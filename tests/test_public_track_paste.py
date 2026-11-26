@@ -176,10 +176,18 @@ class TestPasteTemplate(unittest.TestCase):
         self.assertLess(page.index('name="track_paste"'), form_end)
         self.assertIn('name="track_paste"', self.paste_block(page))
 
-    def test_paste_is_not_ajax_because_the_public_site_has_no_js(self) -> None:
-        """用户端零脚本: 粘贴框必须是普通表单字段, 页面里不能出现 fetch/XHR."""
+    def test_paste_is_a_plain_form_field_and_server_still_parses(self) -> None:
+        """粘贴框仍是普通表单字段 —— 前端暂存只是体验层, 服务端那条链路还在.
+
+        用户 m16094 要求"点按钮先暂存, 点保存才写库", 所以前端(public.js)会
+        解析并填表; 但页面本身仍然**不带**内联脚本/fetch 调用, JS 没跑起来时
+        表单照常 POST, 服务端 trackparse.py 会再解析一遍 track_paste。
+        """
         page = self.render()
         self.assertIn('method="post"', page)
+        self.assertIn('name="track_paste"', page)
+        # 服务端渲染的 HTML 里不该出现内联脚本或 AJAX 调用
+        self.assertNotIn("<script>", page)
         self.assertNotIn("fetch(", page)
         self.assertNotIn("XMLHttpRequest", page)
         self.assertNotIn("/api/", page)
@@ -225,42 +233,51 @@ class TestPasteTemplate(unittest.TestCase):
 
 
 class TestPasteSubmitButton(TestPasteTemplate):
-    """粘贴区自己的提交按钮: 用户粘完一整段要有个能点的东西.
+    """粘贴区自己的按钮: 用户粘完一整段要有个能点的东西.
 
     历史: 这个折叠区以前只有一句「保存时随表单一起提交」, 没有任何按钮
-    (用户截图报「这里的提交按钮没了」)。因为公开端零脚本, 按钮只能是普通
-    submit —— 整张表单一起 POST, 服务端再解析 track_paste。
+    (用户截图报「这里的提交按钮没了」)。中间做过普通 submit —— 整张表单一起
+    POST, 服务端再解析 track_paste。用户 m16094 起改成**前端暂存**: 按钮是
+    ``type="button"``, 点一下只用 public.js 解析并填进下面的曲目表, 不发请求
+    也不提交; 真正写库要等用户点最下面的「保存」。
     """
 
-    def test_paste_block_has_its_own_submit_button(self) -> None:
+    def test_paste_block_has_its_own_stage_button(self) -> None:
         block = self.paste_block(self.render())
-        self.assertIn('type="submit"', block)
-        self.assertIn("保存并填入曲目表", block)
+        self.assertIn('type="button"', block)
+        self.assertIn("填入曲目表（暂存）", block)
         self.assertIn('data-track-apply="1"', block)
+        # 不许再是提交按钮 —— 用户明确要求"点完不要直接保存"
+        self.assertNotIn('type="submit"', block)
+        self.assertNotIn("保存并填入曲目表", block)
 
-    def test_button_submits_the_whole_form(self) -> None:
-        """按钮不是 formaction/独立表单, 必须继承外层 edit-form 的 action."""
+    def test_button_never_submits_the_form(self) -> None:
+        """按钮不提交表单: 没有 formaction, 也不是自己的 <form>."""
         page = self.render()
         block = self.paste_block(page)
         self.assertNotIn("formaction", block)
         self.assertNotIn("<form", block)
+        # 仍在编辑表单内(靠最近的 .disc-block / 卡片定位曲目表)
         form_start = page.index('class="edit-form"')
         self.assertLess(form_start, page.index('data-track-apply="1"'))
         self.assertLess(page.index('data-track-apply="1"'), page.index("</form>", form_start))
 
-    def test_old_hint_only_copy_is_gone(self) -> None:
-        """旧的那句纯说明(带分号后跟"没识别出曲目时…")已被按钮行取代."""
+    def test_hint_says_staging_not_saving(self) -> None:
+        """提示必须说清"只是先填到表格, 点保存才写库"."""
         page = self.render()
         self.assertNotIn("保存时随表单一起提交并自动填入下方曲目表", page)
         block = self.paste_block(page)
         self.assertIn("trk-paste-acts", block)
-        self.assertIn("会连同其它字段一起保存", block)
-        self.assertIn("没识别出曲目时曲目表保持原样", block)
+        self.assertIn("只是先填到下面的曲目表", block)
+        self.assertIn("点最下面的「保存」才会真正写进库里", block)
+        # 旧的"会连同其它字段一起保存"是提交语义, 已删
+        self.assertNotIn("会连同其它字段一起保存", block)
 
     def test_button_appears_in_new_album_page_too(self) -> None:
         page = self.render(creating=True)
         block = self.paste_block(page)
         self.assertIn('data-track-apply="1"', block)
+        self.assertIn('type="button"', block)
 
     def test_css_lays_out_the_button_row(self) -> None:
         def rule(selector: str) -> str:
