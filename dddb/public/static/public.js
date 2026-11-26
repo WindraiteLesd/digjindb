@@ -2768,7 +2768,11 @@
       ["lit.link", "lit.link"],
       ["note.com", "note"],
       ["tunecore.co.jp", "TuneCore"],
-      ["diverse.direct", "DIVERSE DIRECT"]
+      ["diverse.direct", "DIVERSE DIRECT"],
+      // 用户 m17600
+      ["shop.geekjack.net", "Geek Jack"],
+      ["geekjack.net", "Geek Jack"],
+      ["tanocstore.net", "TANO*C Store"]
     ];
     function guess(value) {
       var text = String(value || "").trim();
@@ -2977,6 +2981,11 @@
   // 只有碟号、没写 Disc 前缀的写法(第2碟 / 2枚目)
   var RE_DISC_CN = /^第?\s*(\d{1,2})\s*(?:枚目|碟|盘|張目|张目)$/;
   var RE_RULE_LINE = /^[-=_*~·—–\s]{3,}$/;
+  // infobox 文本(用户 m17600): 整段粘进来时要先把 `tracks ||` 前缀剥掉,
+  // 否则 "title || xxx" 这种行会被当成曲名。与 dddb/trackparse.py 同一套规则。
+  var RE_INFOBOX_TRACK = /^\s*tracks\s*\|\|\s?(.*)$/i;
+  var RE_INFOBOX_DISC = /^\s*disc\s*\|\|\s*(\d{1,2})\s*(?:[:：].*)?$/i;
+  var RE_INFOBOX_CONT = /^\s*\|\|\s?(.*)$/;
   var RE_INDEX_HEAD = new RegExp(
     "^((?:(?:tr|trk|track|no|number)\\s*[.:、)\\]]?\\s*|#\\s*)(\\d{1,3})" +
     "|(\\d{1,3})\\s*[.,、)]\\s*(?!\\d)" +
@@ -3136,8 +3145,32 @@
     return number > 0 ? number : null;
   }
 
+  /* 用户 m17600: 粘进来的可能是 infobox 全文, 只挑 `tracks ||` / `disc ||` 那几行.
+     没有 tracks 行的普通文本原样返回(普通粘贴不受影响). 与 trackparse.py 一致. */
+  function stripInfoboxTracks(text) {
+    var source = String(text == null ? "" : text);
+    var lines = source.split(/\r\n|\r|\n/);
+    var hasTracks = lines.some(function (line) {
+      return RE_INFOBOX_TRACK.test(line);
+    });
+    if (!hasTracks) { return source; }
+    var kept = [];
+    lines.forEach(function (line) {
+      var match = RE_INFOBOX_TRACK.exec(line);
+      if (match) { kept.push(match[1].trim()); return; }
+      match = RE_INFOBOX_DISC.exec(line);
+      if (match) { kept.push("Disc " + match[1]); return; }
+      match = RE_INFOBOX_CONT.exec(line);
+      if (match && kept.length) {
+        kept[kept.length - 1] = (kept[kept.length - 1] + " " + match[1].trim()).trim();
+      }
+    });
+    return kept.join("\n");
+  }
+
   function parsePasteTracks(text) {
     var source = String(text == null ? "" : text);
+    source = stripInfoboxTracks(source);
     var pending = [];
     var disc = 1;
     source.split(/\r\n|\r|\n/).forEach(function (line) {
@@ -3446,6 +3479,11 @@
           pasteHint(trackBox, "识别出 " + tracks.length + " 首, 但页面上找不到曲目表。");
           return;
         }
+        // 用户 m17600: 打过标记之后, 下面表格就是权威版本 —— 服务端见到
+        // track_staged=1 就不再拿这个框里的原文重新解析(否则用户改过的标题、
+        // 删掉的行会在保存时被粘贴原文盖回去)。
+        var stagedField = trackBox.querySelector('input[name="track_staged"]');
+        if (stagedField) { stagedField.value = "1"; }
         pasteHint(trackBox, "已把 " + filled + " 首"
           + (trackMode === "append" ? "追加" : "填")
           + "进下面的曲目表; 还没保存, 点最下面的「保存」才会写进库里。");
