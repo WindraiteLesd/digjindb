@@ -350,6 +350,26 @@ def _text(value: Any) -> str:
     return str(value or "").strip()
 
 
+def _disc_names(value: Any) -> dict[str, str]:
+    """碟名映射(用户 m16568): 键统一成 ``"1"`` 这种碟号字符串, 值去空白.
+
+    ``payload["discs"]`` 在库里可能被写成 ``{1: "..."}``(JSON 里是字符串键,
+    但直接读 dict 时也可能是 int), 这里统一归一, 非法项丢掉。
+    """
+    if not isinstance(value, Mapping):
+        return {}
+    out: dict[str, str] = {}
+    for raw_key, raw_name in value.items():
+        try:
+            number = int(str(raw_key).strip())
+        except (TypeError, ValueError):
+            continue
+        name = _text(raw_name)
+        if number > 0 and name:
+            out[str(number)] = name
+    return out
+
+
 def _int(value: Any, default: int = 0) -> int:
     try:
         return int(value)
@@ -746,6 +766,12 @@ class PublicData:
             "price": _text(payload.get("price")),
             "booth": _text(payload.get("booth")),
             "hall": _text(payload.get("hall")),
+            # 用户 m16568: 各碟的名字 / 原作 IP / 制作人 / 发布平台 / 出品类型
+            "discs": _disc_names(payload.get("discs")),
+            "original_work": _text(payload.get("original_work")),
+            "producer": _text(payload.get("producer")),
+            "platform": _text(payload.get("platform")),
+            "release_kind": _text(payload.get("release_kind")),
             "artists": artists,
             "tags": tags,
             "genres": genres,
@@ -845,8 +871,15 @@ class PublicData:
                 "json_extract(a.payload, '$.catalog_no') LIKE ?",
                 "EXISTS (SELECT 1 FROM json_each(a.payload, '$.artists') ja WHERE ja.value LIKE ?)",
                 "EXISTS (SELECT 1 FROM json_each(a.payload, '$.tracks') jt WHERE jt.value ->> 'title' LIKE ?)",
+                # 用户 m16568: 命名的碟(如 Disc 2『Nightmare』)也要能被搜到 ——
+                # 流媒体上两碟常以不同名字分别发行, 那个名字就是它的身份之一。
+                "EXISTS (SELECT 1 FROM json_each(a.payload, '$.discs') jd WHERE jd.value LIKE ?)",
+                # 原作 IP(东方 / 蔚蓝档案 …)与制作人、发布平台也一并纳入
+                "json_extract(a.payload, '$.original_work') LIKE ?",
+                "json_extract(a.payload, '$.producer') LIKE ?",
+                "json_extract(a.payload, '$.platform') LIKE ?",
             ]
-            params.extend([needle, needle, needle, needle, needle, needle])
+            params.extend([needle] * len(parts))
             if "norm_title" in cols:
                 parts.append("a.norm_title LIKE ?")
                 params.append(norm_needle)
