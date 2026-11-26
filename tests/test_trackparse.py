@@ -467,7 +467,7 @@ class TestEdgesAndContract(unittest.TestCase):
         track = only(f"01. {TITLE} / {ARTIST} 4:12")
         data = track.to_dict()
         self.assertEqual(set(data), {"index", "title", "artists", "duration",
-                                     "duration_text", "number", "raw"})
+                                     "duration_text", "number", "raw", "disc"})
         self.assertEqual(data["artists"], [ARTIST])
         self.assertEqual(data["duration"], 252)
         self.assertEqual(data["index"], 1)
