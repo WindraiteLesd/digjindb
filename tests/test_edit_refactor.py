@@ -88,8 +88,10 @@ class TestInfoCard(unittest.TestCase):
         self.assertNotIn('data-name="artists"', self.info)
 
     def test_circle_and_company_together(self) -> None:
-        self.assertIn("社团/制作人", self.info)
-        self.assertIn("发行公司", self.info)
+        # 用户 m16568: 发行公司输入框去掉了(同人展侧把社团和发行公司合并), 换成制作人
+        self.assertIn("社团 / 出品方", self.info)
+        self.assertIn("制作人", self.info)
+        self.assertNotIn("发行公司", self.info)
 
     def test_catalog_label_is_binhang(self) -> None:
         """编号 -> 品番。"""
