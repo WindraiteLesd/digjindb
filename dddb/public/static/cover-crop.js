@@ -574,6 +574,13 @@
       }
       // 上传成功后**整页刷新** —— 服务端会把新图/附图渲染出来。
       // 这比在 DOM 里拼状态可靠得多(之前就是这里出问题)。
+      // 用户 m16568: 刷新会丢掉没落盘的草稿, 所以先让 public.js 同步写一次,
+      // 回来时 public.js 会看到 ":resume" 标记并自动套用。
+      try {
+        if (typeof window.dddbFlushDraft === "function") {
+          window.dddbFlushDraft();
+        }
+      } catch (e) { /* 忽略 */ }
       var next = form.getAttribute("data-cover-next") ||
                  location.pathname;
       var sep = next.indexOf("?") >= 0 ? "&" : "?";
@@ -653,7 +660,15 @@
         fd.append("url", url);
         fetch(form.getAttribute("data-photo-del-action") || "", {
           method: "POST", body: fd, credentials: "same-origin"
-        }).then(function () { location.reload(); });
+        }).then(function () {
+          // 用户 m16568: 同样会整页刷新, 先落盘草稿
+          try {
+            if (typeof window.dddbFlushDraft === "function") {
+              window.dddbFlushDraft();
+            }
+          } catch (e) { /* 忽略 */ }
+          location.reload();
+        });
       });
     });
     document.querySelectorAll("[data-photo-note]").forEach(function (inp) {
