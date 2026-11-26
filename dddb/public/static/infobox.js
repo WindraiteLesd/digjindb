@@ -15,7 +15,9 @@
   var SINGLE = {
     key: 1, title_original: 1, title: 1, title_romaji: 1, circle: 1,
     company: 1, artists: 1, event: 1, release_date: 1, catalog_no: 1,
-    price: 1, hall: 1, booth: 1, tags: 1, genres: 1, cover: 1
+    price: 1, hall: 1, booth: 1, tags: 1, genres: 1, cover: 1,
+    // 用户 m16568: 出品信息的新字段
+    original_work: 1, producer: 1, platform: 1, release_kind: 1
   };
 
   function $(s, root) { return (root || document).querySelector(s); }
@@ -26,9 +28,12 @@
   /* ---- 解析 infobox ---- */
   function parseInfobox(text) {
     var out = {
-      single: {}, links: [], credits: [], tracks: [], description: ""
+      single: {}, links: [], credits: [], tracks: [], discs: {},
+      description: ""
     };
     var current = "";
+    // 用户 m16568: infobox 里的 disc || 2[: 名字] 之后的曲目都算这一碟
+    var currentDisc = 1;
     var lines = String(text || "").split(/\r?\n/);
     var descParts = [];
 
@@ -64,6 +69,17 @@
           out.credits.push({role: role, name: rest,
                             original: orig, alias: alias});
         }
+      } else if (current === "disc") {
+        // disc || 2   或者   disc || 2: Nightmare
+        var dm = value.match(/^\s*(\d{1,2})(?:\s*[:：]\s*(.*))?\s*$/);
+        if (dm) {
+          var discNo = parseInt(dm[1], 10);
+          if (discNo > 0) {
+            currentDisc = discNo;
+            var discName = (dm[2] || "").trim();
+            if (discName) { out.discs[String(discNo)] = discName; }
+          }
+        }
       } else if (current === "tracks") {
         var tm = value.match(
           /^\s*(\d+)\s*[.、)]\s*(.+?)\s*(?:\[(\d{1,2}:\d{2}(?::\d{2})?)\])?\s*(?:\/\s*(.+))?$/);
@@ -72,7 +88,8 @@
             index: parseInt(tm[1], 10) || out.tracks.length + 1,
             title: (tm[2] || "").trim(),
             duration: tm[3] || "",
-            artists: tm[4] ? tm[4].trim() : ""
+            artists: tm[4] ? tm[4].trim() : "",
+            disc: currentDisc
           });
         }
       } else if (current === "description") {
@@ -169,12 +186,31 @@
     // 从 1 开始**的(见 IB.build), 所以「音轨号不再递增」就是碟边界 —— 用这个
     // 把曲目切成若干组, 一组对应一张碟。只有一张碟的页面则全部归到一组并改成
     // 连续编号, 否则会出现 1..11,1..11 这种重复音轨号。
-    var singleDisc = blocks.length <= 1;
+    // 用户 m16568: infobox 现在自带 disc 字段, 有就按它分组(优先于「音轨号不递增」
+    // 的猜测 —— 两碟都以 1 开头只是最常见的巧合, 真按 disc 分更准)。
+    var hasDiscField = tracks.some(function (t) {
+      return Number(t.disc || 0) > 1;
+    });
+    var singleDisc = blocks.length <= 1 && !hasDiscField;
     var groups = [];
     if (singleDisc) {
       groups.push(tracks.map(function (t, i) {
         return { track: t, index: i + 1 };
       }));
+    } else if (hasDiscField) {
+      var byDisc = {};
+      var discOrder = [];
+      tracks.forEach(function (t) {
+        var d = Number(t.disc) || 1;
+        if (!byDisc[d]) { byDisc[d] = []; discOrder.push(d); }
+        byDisc[d].push(t);
+      });
+      discOrder.sort(function (a, b) { return a - b; });
+      discOrder.forEach(function (d) {
+        groups.push(byDisc[d].map(function (t, i) {
+          return { track: t, index: Number(t.index) || i + 1 };
+        }));
+      });
     } else {
       var cur = [];
       var lastIndex = 0;
@@ -237,6 +273,28 @@
         put("track_disc", discNo);
         filledCount += 1;
       });
+    });
+    return filledCount;
+  }
+
+  /* 用户 m16568: 碟名 —— infobox 的 disc || 2: Nightmare 要落进
+     「这一碟的名字」输入框(name="disc_name_<碟号>")。按碟号匹配,
+     找不到对应碟就跳过(不新建碟, 免得凭空多出一张)。 */
+  function fillDiscNames(discs) {
+    var names = discs || {};
+    var keys = Object.keys(names);
+    if (!keys.length) { return 0; }
+    var filledCount = 0;
+    $$(".disc-block").forEach(function (block) {
+      var no = String(block.getAttribute("data-disc") || "");
+      var value = names[no];
+      if (value == null) { return; }
+      var input = block.querySelector("input.disc-name-input");
+      if (!input) { return; }
+      input.value = String(value);
+      fire(input, "input");
+      fire(input, "change");
+      filledCount += 1;
     });
     return filledCount;
   }
@@ -331,7 +389,8 @@
     var filled = [];
 
     ["title_original", "title", "title_romaji", "circle", "company",
-     "event", "release_date", "catalog_no", "price", "hall", "booth"]
+     "event", "release_date", "catalog_no", "price", "hall", "booth",
+     "original_work", "producer", "platform"]
       .forEach(function (k) {
         if (!s[k]) { return; }
         // circle / event 是 bind 控件(可能多值), 其余是普通文本框
@@ -445,6 +504,9 @@
       var rowsFilled = fillTrackRows(d.tracks);
       if (rowsFilled) {
         filled.push("曲目 " + rowsFilled);
+        // 碟名要在曲目落位之后再填 —— 曲目表可能刚补出新碟
+        var discsFilled = fillDiscNames(d.discs);
+        if (discsFilled) { filled.push("碟名 " + discsFilled); }
       } else {
         var paste = document.querySelector('[name="track_paste"]');
         if (paste) {
