@@ -204,6 +204,59 @@ _DISC_CN_RE = re.compile(r"^第?\s*(\d{1,2})\s*(?:枚目|碟|盘|張目|张目)$
 #: 兜底: 空行 / 分隔线
 _RULE_RE = re.compile(r"^[-=_*~·—–\s]{3,}$")
 
+#: infobox 里的一整行曲目: ``tracks || 1. 曲名 [3:57] / 艺人``
+#: (用户 m17600: 用户会把 infobox 文本整段粘进来, 那些 ``xxx ||`` 前缀得先剥掉,
+#: 否则整行会被当成曲名)
+_INFOBOX_TRACK_RE = re.compile(r"^\s*tracks\s*\|\|\s?(.*)$", re.IGNORECASE)
+#: infobox 的分碟行: ``disc || 2`` / ``disc || 2: Nightmare`` -> ``Disc 2``
+_INFOBOX_DISC_RE = re.compile(
+    r"^\s*disc\s*\|\|\s*(\d{1,2})\s*(?:[:：].*)?$", re.IGNORECASE)
+#: infobox 的续行: 紧跟某个字段的 ``|| 更多内容``
+_INFOBOX_CONT_RE = re.compile(r"^\s*\|\|\s?(.*)$")
+
+
+def strip_infobox_tracks(text: str) -> str:
+    """把 infobox 文本里 ``tracks || ...`` 那些曲目行单独抽出来(用户 m17600).
+
+    粘进来的若是 ``[dddb]`` 风格的整体词条, 里面长这样::
+
+        [dddb]
+        title || 专缉名
+        disc || 2: Nightmare
+        tracks || 1. 曲名 [3:57] / 艺人
+
+    直接丢给 :func:`parse_tracklist` 会把 ``title || ...`` 也当成曲名(它看起来
+    就是一行普通文字)。这里只保留曲目行与分碟行, 并把前缀剥掉, 转成普通的
+    曲目表文本::
+
+        1. 曲名 [3:57] / 艺人
+        Disc 2
+        ...
+
+    **没有** ``tracks ||`` 行的文本原样返回 —— 普通粘贴不受影响。
+    """
+    source = text if isinstance(text, str) else ("" if text is None else str(text))
+    lines = source.splitlines()
+    if not any(_INFOBOX_TRACK_RE.match(line) for line in lines):
+        return source
+    kept: list[str] = []
+    for line in lines:
+        match = _INFOBOX_TRACK_RE.match(line)
+        if match:
+            kept.append(match.group(1).strip())
+            continue
+        match = _INFOBOX_DISC_RE.match(line)
+        if match:
+            kept.append("Disc {}".format(match.group(1)))
+            continue
+        match = _INFOBOX_CONT_RE.match(line)
+        if match and kept:
+            #: 上一行是曲目就接着写(infobox 的长字段会折行成 ``|| ...``)
+            kept[-1] = (kept[-1] + " " + match.group(1).strip()).strip()
+            continue
+        #: 其余字段(title || / circle || / credits || ...)全部丢掉
+    return "\n".join(kept)
+
 #: 整行精确等于这些词 -> 是表头(中日文表头不会被当成曲名, 直接跳过)
 _HEADER_EXACT = frozenset({
     "曲目", "曲目表", "曲目列表", "曲目清单", "曲名", "曲名リスト", "标题", "標題",
@@ -431,6 +484,8 @@ def parse_tracklist(text: str) -> list[ParsedTrack]:
     ``text`` 为空 / 纯空白 / 只有表头与时长行 -> 返回空列表。
     """
     source = text if isinstance(text, str) else ("" if text is None else str(text))
+    #: 用户 m17600: 粘进来的可能是 infobox 全文, 先把 ``tracks || ...`` 那几行挑出来
+    source = strip_infobox_tracks(source)
     lines = source.splitlines()
     pending: list[_Pending] = []
     disc = 1                                  #: 当前碟号(遇到碟号行就换)
