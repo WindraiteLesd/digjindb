@@ -434,6 +434,10 @@
             var next = form.getAttribute("data-cover-next") ||
                        window.location.pathname;
             var sep = next.indexOf("?") >= 0 ? "&" : "?";
+            // 用户 m16568: 跳走之前先把草稿落盘, 否则刷新后丢进度
+            if (typeof window.dddbFlushDraft === "function") {
+              window.dddbFlushDraft();
+            }
             window.location.href = next + sep + "t=" + Date.now();
           }
         }, 400);
@@ -815,6 +819,16 @@
        注意要包一层调用: 直接把 save 交给 addEventListener 会把 Event 当成
        force 传进去, 于是每次离开页面都无条件写盘(没改过也写)。 */
     window.addEventListener("beforeunload", function () { save(false); });
+    /* 用户 m16568: 改封面之后页面会整页刷新(服务端要重新渲染新图),
+       刷新前必须把草稿**同步写盘**, 否则 1.2 秒防抖还没落地就跳走了,
+       回来看到的是旧草稿(或者根本没有)。上传封面的两条路径都会先调它。
+       同时留一个"回来自动恢复"的标记 —— 用户明确要求
+       「要么不刷新, 要么刷新后自动恢复最新进度」, 不能只弹个"恢复草稿"按钮。 */
+    var RESUME_KEY = KEY + ":resume";
+    window.dddbFlushDraft = function () {
+      try { save(false); } catch (err) { /* 忽略 */ }
+      try { window.localStorage.setItem(RESUME_KEY, "1"); } catch (err) { /* 忽略 */ }
+    };
     document.addEventListener("visibilitychange", function () {
       if (document.visibilityState === "hidden") { save(false); }
     });
@@ -925,6 +939,18 @@
       if (same) {
         try { window.localStorage.removeItem(KEY); } catch (err2) { /* 忽略 */ }
         bar.textContent = "编辑内容会自动存草稿";
+        return;
+      }
+      /* 用户 m16568: 页面是因为「刚传完封面刷新」而重载的(resume 标记在),
+         这时候不要等用户点按钮 —— 直接恢复, 否则改封面前填的东西看着像丢了。 */
+      var resume = false;
+      try {
+        resume = window.localStorage.getItem(RESUME_KEY) === "1";
+        if (resume) { window.localStorage.removeItem(RESUME_KEY); }
+      } catch (err3) { resume = false; }
+      if (resume) {
+        applyDraft(saved, "已自动恢复刷新前的编辑内容");
+        bar.textContent = "已自动恢复刷新前的编辑内容";
         return;
       }
       bar.textContent = "发现 " + new Date(saved.at).toLocaleTimeString() +
@@ -2222,6 +2248,10 @@
         if (resp.ok) {
           var target = next || window.location.pathname;
           var sep = target.indexOf("?") >= 0 ? "&" : "?";
+          // 用户 m16568: 这一跳会丢掉没落盘的草稿, 先同步写一次
+          if (typeof window.dddbFlushDraft === "function") {
+            window.dddbFlushDraft();
+          }
           window.location.href = target + sep + "t=" + Date.now();
           return;
         }
@@ -2344,6 +2374,35 @@
     return max || 1;
   }
 
+  /* 用户 m16568: 碟能被上移/下移之后, 碟号必须按**当前 DOM 顺序**重新编,
+     否则 track_disc 会和屏幕上看到的顺序对不上(保存后碟序又变回去)。
+     名字输入框的 name 也要跟着改(它按碟号命名: disc_name_<碟号>)。 */
+  function syncDiscNumbers() {
+    var blocks = document.querySelectorAll(".disc-block");
+    Array.prototype.forEach.call(blocks, function (block, i) {
+      var no = i + 1;
+      block.setAttribute("data-disc", String(no));
+      var title = block.querySelector(".disc-title");
+      if (title) {
+        title.textContent = "Disc " + (no < 10 ? "0" + no : no);
+      }
+      var nameInput = block.querySelector(".disc-name-input");
+      if (nameInput) {
+        nameInput.setAttribute("name", "disc_name_" + no);
+        nameInput.setAttribute("aria-label", "Disc " + no + " 的名字");
+      }
+      var body = discBody(block);
+      if (body) { body.setAttribute("data-disc-body", String(no)); }
+      var rows = block.querySelectorAll("tr.track-row");
+      Array.prototype.forEach.call(rows, function (row) {
+        row.setAttribute("data-disc", String(no));
+        var field = row.querySelector('input[name="track_disc"]');
+        if (field) { field.value = String(no); }
+      });
+      renumberDisc(block);
+    });
+  }
+
   function focusTitle(scope) {
     if (!scope) { return; }
     var rows = scope.querySelectorAll("tr.track-row");
@@ -2370,10 +2429,20 @@
     title.textContent = "Disc " + (discNo < 10 ? "0" + discNo : discNo);
     head.appendChild(title);
 
+    // 用户 m16568: 新建的碟也要有命名框, 否则 JS 加出来的碟没法命名
+    var nameInput = document.createElement("input");
+    nameInput.type = "text";
+    nameInput.className = "disc-name-input";
+    nameInput.name = "disc_name_" + discNo;
+    nameInput.placeholder = "这一碟的名字(可留空)";
+    nameInput.setAttribute("aria-label", "Disc " + discNo + " 的名字");
+    head.appendChild(nameInput);
+
     var tools = document.createElement("span");
     tools.className = "disc-tools";
-    // 「批量添加歌曲」已按用户要求移除, 只剩重排/删碟
-    [["data-disc-renumber", "1", "调整曲轨符", "按当前顺序重排音轨号"],
+    // 用户 m16568: 「调整曲轨符」没用(音轨号本来就会自动重排), 换成调整光碟顺序
+    [["data-disc-move", "-1", "↑ 上移", "与上一张碟交换位置"],
+     ["data-disc-move", "1", "↓ 下移", "与下一张碟交换位置"],
      ["data-disc-remove", "1", "删除光盘", "删除整张碟"]].forEach(
       function (item) {
         var btn = document.createElement("button");
@@ -2903,7 +2972,10 @@
   var RE_BARE_INDEX = /^(?:(?:tr|trk|track|no|number|#)\s*[.:、)]?\s*)?(\d{1,3})[.,、)]?$/i;
   var RE_BULLET = /^(?:[・•·‣■□●○◆◇★☆]|[*+]\s*|[-–—]\s+)/;
   var RE_COMMENT = /^(?:#(?!\s*\d)|\/\/|;|※|>\s)/;
-  var RE_DISC_LINE = /^(?:disc|disk|cd|vol\.?|volume|ディスク|碟)[ \t]*[-–—]?[ \t]*\d+$/i;
+  // 碟号行(用户 m16568: 要能识别分碟, 所以这里**捕获**碟号而不是丢掉)
+  var RE_DISC_LINE = /^(?:disc|disk|cd|vol\.?|volume|ディスク|碟)[ \t]*[-–—]?[ \t]*(\d+)$/i;
+  // 只有碟号、没写 Disc 前缀的写法(第2碟 / 2枚目)
+  var RE_DISC_CN = /^第?\s*(\d{1,2})\s*(?:枚目|碟|盘|張目|张目)$/;
   var RE_RULE_LINE = /^[-=_*~·—–\s]{3,}$/;
   var RE_INDEX_HEAD = new RegExp(
     "^((?:(?:tr|trk|track|no|number)\\s*[.:、)\\]]?\\s*|#\\s*)(\\d{1,3})" +
@@ -3056,15 +3128,30 @@
     return pending;
   }
 
+  /* 这一行是不是碟号分隔行? 是则返回碟号, 否则 null(用户 m16568) */
+  function parsePasteDisc(line) {
+    var match = RE_DISC_LINE.exec(line) || RE_DISC_CN.exec(line);
+    if (!match) { return null; }
+    var number = parseInt(match[1], 10);
+    return number > 0 ? number : null;
+  }
+
   function parsePasteTracks(text) {
     var source = String(text == null ? "" : text);
     var pending = [];
+    var disc = 1;
     source.split(/\r\n|\r|\n/).forEach(function (line) {
       var normalized = normPasteText(line).trim();
+      var found = parsePasteDisc(normalized);
+      if (found !== null) { disc = found; return; }
       var item = scanPasteLine(normalized, line.trim());
-      if (item) { pending.push(item); }
+      if (item) {
+        item.disc = disc;
+        pending.push(item);
+      }
     });
     var tracks = [];
+    var counters = {};
     pending.forEach(function (item, position) {
       var number = item.number, title, artists;
       if (item.weak && number !== position + 1) {
@@ -3075,8 +3162,11 @@
         artists = item.artists.slice();
       }
       if (!title) { return; }
+      counters[item.disc] = (counters[item.disc] || 0) + 1;
       tracks.push({
-        index: tracks.length + 1, title: title, artists: artists,
+        disc: item.disc,
+        index: counters[item.disc],
+        title: title, artists: artists,
         duration: item.duration
       });
     });
@@ -3089,6 +3179,9 @@
   var RE_CREDIT_COLON = /[:：]/g;
   var RE_CREDIT_NAME_SPLIT = /\s*[/、,，;；]\s*/;
   var RE_CREDIT_BULLET = /^\s*(?:[-*·•]|\d+\s*[.、)）])\s*/;
+  // 推特/X 文本里的 @handle(用户 m16568: 制作人员识别要排除 @)。
+  // 只认前面不是字母数字的 @ —— 邮箱 a@b.com 不该被腰斩。
+  var RE_CREDIT_AT = /(?<![\w.])@[A-Za-z0-9_]{1,30}/g;
   var CREDIT_HEADER_WORDS = {};
   ("职责 职位 角色 担当 人员 名字 姓名 staff credit credits role roles name names"
   ).split(" ").forEach(function (word) { CREDIT_HEADER_WORDS[word.toLowerCase()] = true; });
@@ -3100,7 +3193,8 @@
       if (next === value) { break; }
       value = next;
     }
-    return value.replace(RE_CREDIT_URL, " ").replace(/\s+/g, " ").trim();
+    return value.replace(RE_CREDIT_URL, " ").replace(RE_CREDIT_AT, " ")
+      .replace(/\s+/g, " ").trim();
   }
 
   function isCreditHeaderLine(line) {
@@ -3171,40 +3265,91 @@
     var blocks = Array.prototype.slice.call(host.querySelectorAll(".disc-block"));
     if (!blocks.length) { return 0; }
 
+    // 用户 m16568: 粘贴文本可能带分碟(Disc 2 ...), 按碟号分组后再填
+    var groups = [];
+    var byDisc = {};
+    tracks.forEach(function (track) {
+      var disc = parseInt(track.disc, 10) || 1;
+      if (disc < 1) { disc = 1; }
+      if (!byDisc[disc]) { byDisc[disc] = []; groups.push(disc); }
+      byDisc[disc].push(track);
+    });
+    groups.sort(function (a, b) { return a - b; });
+
+    var writeRow = function (body, discNo, track) {
+      var count = body.querySelectorAll("tr.track-row").length;
+      var row = buildTrackRow(discNo, count + 1);
+      body.appendChild(row);
+      putTrackCell(row, "track_title", track.title);
+      putTrackCell(row, "track_artists", (track.artists || []).join("、"));
+      putTrackCell(row, "track_duration", formatPasteDuration(track.duration));
+    };
+    // addDiscBlock 会顺手塞一行空行, 粘贴时不要它
+    var freshDisc = function (discNo) {
+      var block = addDiscBlock(discNo);
+      if (!block) { return null; }
+      var body = discBody(block);
+      if (body) { body.innerHTML = ""; }
+      return block;
+    };
+
     if (mode === "append") {
-      var lastBlock = blocks[blocks.length - 1];
-      var lastBody = discBody(lastBlock);
-      if (!lastBody) { return 0; }
-      var discNo = discNumber(lastBlock);
-      tracks.forEach(function (track) {
-        var count = lastBody.querySelectorAll("tr.track-row").length;
-        var row = buildTrackRow(discNo, count + 1);
-        lastBody.appendChild(row);
-        putTrackCell(row, "track_title", track.title);
-        putTrackCell(row, "track_artists", (track.artists || []).join("、"));
-        putTrackCell(row, "track_duration", formatPasteDuration(track.duration));
+      // 追加: 每一组都落在**最后一碟之后**的新碟里, 绝不塞进已有的碟
+      var base = discNumber(blocks[blocks.length - 1]);
+      groups.forEach(function (disc, i) {
+        var block;
+        if (i === 0) {
+          block = blocks[blocks.length - 1];
+          var reuseBody = discBody(block);
+          if (!reuseBody) { return; }
+          byDisc[disc].forEach(function (track) {
+            writeRow(reuseBody, base, track);
+          });
+        } else {
+          block = freshDisc(base + i);
+          if (!block) { return; }
+          var body = discBody(block);
+          if (!body) { return; }
+          byDisc[disc].forEach(function (track) {
+            writeRow(body, base + i, track);
+          });
+        }
+        renumberDisc(block);
       });
-      renumberDisc(lastBlock);
       return tracks.length;
     }
 
-    // replace: 清空所有碟的曲目行, 全部落到第 1 张碟(粘贴里没有碟信息)
+    // replace: 清空所有碟, 再按粘贴里的碟号重建(不够就补碟, 多了就删多余的空碟)
     blocks.forEach(function (block) {
       var body = discBody(block);
       if (body) { body.innerHTML = ""; }
     });
-    var first = blocks[0];
-    var firstBody = discBody(first);
-    if (!firstBody) { return 0; }
-    var firstDisc = discNumber(first);
-    tracks.forEach(function (track, i) {
-      var row = buildTrackRow(firstDisc, i + 1);
-      firstBody.appendChild(row);
-      putTrackCell(row, "track_title", track.title);
-      putTrackCell(row, "track_artists", (track.artists || []).join("、"));
-      putTrackCell(row, "track_duration", formatPasteDuration(track.duration));
+    groups.forEach(function (disc, i) {
+      var block = blocks[i];
+      if (!block) {
+        block = freshDisc(discNumber(blocks[blocks.length - 1]) + 1);
+        if (!block) { return; }
+        blocks.push(block);
+      }
+      var body = discBody(block);
+      if (!body) { return; }
+      var discNo = discNumber(block);
+      byDisc[disc].forEach(function (track) {
+        writeRow(body, discNo, track);
+      });
+      renumberDisc(block);
     });
-    blocks.forEach(renumberDisc);
+    // 比粘贴内容多出来的碟: 只留一碟, 其余删掉(空的才删, 有内容的原样保留)
+    for (var i = groups.length; i < blocks.length; i++) {
+      var extra = blocks[i];
+      var extraBody = discBody(extra);
+      if (extraBody && !extraBody.querySelectorAll("tr.track-row").length && i > 0) {
+        extra.parentNode.removeChild(extra);
+      }
+    }
+    blocks.forEach(function (block) {
+      if (block.parentNode) { renumberDisc(block); }
+    });
     return tracks.length;
   }
 
@@ -3350,6 +3495,82 @@
     });
   }
 
+  /* ==========================================================================
+     详情页封面画廊(用户 m16568)
+     一张专辑可能有两张封面(双碟各一张, 第二张其实是附图)。
+     模板把封面 + 附图都渲染成 data-cover-frame, 这里只负责切换:
+     右侧点击区域 = 下一张, 底部圆点 = 直接跳。
+     ========================================================================== */
+  /* ==========================================================================
+     出品信息: 同人展侧 / 独立同人侧(用户 m16568)
+     两组字段都在表单里(没脚本时两组都显示, 照样能保存),
+     有脚本时按选中的侧只显示对应的那组。
+     ========================================================================== */
+  function setupReleaseKind() {
+    var picker = document.querySelector("[data-release-kind-pick]");
+    if (!picker) { return; }
+    var groups = document.querySelectorAll(".info-group[data-release-kind]");
+
+    function apply(kind) {
+      Array.prototype.forEach.call(groups, function (group) {
+        var match = group.getAttribute("data-release-kind") === kind;
+        if (match) { group.removeAttribute("hidden"); }
+        else { group.setAttribute("hidden", ""); }
+      });
+    }
+
+    var checked = picker.querySelector('input[name="release_kind"]:checked');
+    if (checked) { apply(checked.value); }
+    picker.addEventListener("change", function (e) {
+      var input = e.target;
+      if (input && input.name === "release_kind" && input.checked) {
+        apply(input.value);
+      }
+    });
+  }
+
+  /* 详情页封面画廊(用户 m16568). 名字不能叫 setupCoverGallery ——
+     编辑页那套多图槽位也叫这个名, 函数声明提升会让后者顶掉前者。 */
+  function setupDetailCover() {
+    var gallery = document.querySelector("[data-cover-gallery]");
+    if (!gallery) { return; }
+    var frames = gallery.querySelectorAll("[data-cover-frame]");
+    if (frames.length < 2) { return; }
+    var dots = gallery.querySelectorAll("[data-cover-goto]");
+    var counter = gallery.querySelector("[data-cover-count]");
+    var current = 0;
+
+    function show(index) {
+      var total = frames.length;
+      current = ((index % total) + total) % total;
+      Array.prototype.forEach.call(frames, function (frame, i) {
+        var hidden = i !== current;
+        frame.classList.toggle("is-hidden", hidden);
+        if (hidden) { frame.setAttribute("hidden", ""); }
+        else { frame.removeAttribute("hidden"); }
+      });
+      Array.prototype.forEach.call(dots, function (dot, i) {
+        dot.classList.toggle("is-active", i === current);
+      });
+      if (counter) { counter.textContent = (current + 1) + "/" + total; }
+    }
+
+    gallery.addEventListener("click", function (e) {
+      var target = e.target;
+      if (!target || !target.closest) { return; }
+      if (target.closest("[data-cover-next]")) {
+        e.preventDefault();
+        show(current + 1);
+        return;
+      }
+      var dot = target.closest("[data-cover-goto]");
+      if (dot) {
+        e.preventDefault();
+        show(parseInt(dot.getAttribute("data-cover-goto"), 10) || 0);
+      }
+    });
+  }
+
   function setupTrackRows() {
     document.addEventListener("click", function (e) {
       var target = e.target;
@@ -3396,15 +3617,28 @@
           return;
         }
         if (rmBlock.parentNode) { rmBlock.parentNode.removeChild(rmBlock); }
+        syncDiscNumbers();
         return;
       }
 
-      // 调整曲轨符(按当前顺序重排)
-      var renumber = target.closest('[data-disc-renumber="1"]');
-      if (renumber) {
+      // 调整光碟顺序(用户 m16568: 原来的「调整曲轨符」没实际作用, 换成上移/下移)
+      var moveDisc = target.closest("[data-disc-move]");
+      if (moveDisc) {
         e.preventDefault();
-        var rnBlock = renumber.closest(".disc-block");
-        if (rnBlock) { renumberDisc(rnBlock); }
+        var mvBlock = moveDisc.closest(".disc-block");
+        if (!mvBlock) { return; }
+        var step = parseInt(moveDisc.getAttribute("data-disc-move"), 10) || 0;
+        var all = document.querySelectorAll(".disc-block");
+        var pos = Array.prototype.indexOf.call(all, mvBlock);
+        var to = pos + step;
+        if (pos < 0 || to < 0 || to >= all.length) { return; }
+        var other = all[to];
+        if (step < 0) {
+          other.parentNode.insertBefore(mvBlock, other);
+        } else {
+          other.parentNode.insertBefore(mvBlock, other.nextSibling);
+        }
+        syncDiscNumbers();
         return;
       }
 
@@ -3423,8 +3657,9 @@
 
     });
 
-    /* 拖动排序: 按住「⠿」把手拖动整行; 只能在同一碟内移动(跨碟会破坏分碟语义)。
-       用 HTML5 drag&drop, 不引入第三方库。 */
+    /* 拖动排序: 按住「⠿」把手拖动整行。
+       用户 m16568: 曲子可以跨碟拖 —— 拖到别的碟的行上就整行搬过去,
+       拖到空碟的表格区域/「暂无数据」上也行。松手后两边的碟都要重排音轨号。 */
     var dragRow = null;
     var dragDisc = null;
 
@@ -3448,15 +3683,28 @@
       if (!dragRow) { return; }
       var over = e.target && e.target.closest
         ? e.target.closest("tr.track-row") : null;
-      if (!over || over === dragRow) { return; }
-      // 只允许同一张碟内拖动
-      if (over.closest(".disc-block") !== dragDisc) { return; }
-      e.preventDefault();
-      if (e.dataTransfer) { e.dataTransfer.dropEffect = "move"; }
-      over.classList.add("drag-over");
-      var rect = over.getBoundingClientRect();
-      var after = (e.clientY - rect.top) > rect.height / 2;
-      over.parentNode.insertBefore(dragRow, after ? over.nextSibling : over);
+      if (over && over !== dragRow) {
+        // 用户 m16568: 跨碟也能拖 —— 松开后 syncDiscNumbers() 会把两边的
+        // track_disc / 音轨号重排, 所以这里不再限制同一张碟。
+        e.preventDefault();
+        if (e.dataTransfer) { e.dataTransfer.dropEffect = "move"; }
+        over.classList.add("drag-over");
+        var rect = over.getBoundingClientRect();
+        var after = (e.clientY - rect.top) > rect.height / 2;
+        over.parentNode.insertBefore(dragRow, after ? over.nextSibling : over);
+        return;
+      }
+      // 拖到空碟(没有曲目行)上: 直接落到该碟的 tbody 里
+      var body = e.target && e.target.closest
+        ? e.target.closest("tbody") : null;
+      if (body && !body.querySelector("tr.track-row")) {
+        var emptyBlock = body.closest(".disc-block");
+        if (emptyBlock) {
+          e.preventDefault();
+          if (e.dataTransfer) { e.dataTransfer.dropEffect = "move"; }
+          body.appendChild(dragRow);
+        }
+      }
     });
 
     document.addEventListener("dragleave", function (e) {
@@ -3468,7 +3716,8 @@
     document.addEventListener("dragend", function () {
       if (dragRow) {
         dragRow.classList.remove("dragging");
-        if (dragDisc) { renumberDisc(dragDisc); }
+        // 跨碟拖动后, 每张碟的音轨号与碟号都要按当前 DOM 重排
+        syncDiscNumbers();
       }
       var marked = document.querySelectorAll("tr.track-row.drag-over");
       Array.prototype.forEach.call(marked, function (row) {
@@ -3491,6 +3740,8 @@
                document.querySelector("form[enctype='multipart/form-data']");
     if (form) {
       form.addEventListener("submit", function () {
+        // 删过/移动过碟之后, 编号可能留下空洞(1,3), 提交前先按 DOM 顺序归一
+        syncDiscNumbers();
         var blocks = document.querySelectorAll(".disc-block");
         Array.prototype.forEach.call(blocks, function (block) {
           var body = discBody(block);
@@ -3604,6 +3855,10 @@
     setupLinkAutoName();
     // 整段粘贴: 只在前端解析并填进下面的表格(暂存), 写库仍归最下面的「保存」
     setupPasteFill();
+    // 详情页封面画廊(用户 m16568): 右侧点一下换下一张, 底部圆点直接跳
+    setupDetailCover();
+    // 出品信息: 同人展侧 / 独立同人侧 切换显示
+    setupReleaseKind();
   }
 
   if (document.readyState === "loading") {
