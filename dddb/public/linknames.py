@@ -42,6 +42,10 @@ LINK_NAME_RULES: tuple[tuple[str, str], ...] = (
     ("note.com", "note"),
     ("tunecore.co.jp", "TuneCore"),
     ("diverse.direct", "DIVERSE DIRECT"),
+    # 用户 m17600
+    ("shop.geekjack.net", "Geek Jack"),
+    ("geekjack.net", "Geek Jack"),
+    ("tanocstore.net", "TANO*C Store"),
 )
 
 #: 下拉候选: 上面那些名字去重后按出现顺序, 外加 embed 两种。
