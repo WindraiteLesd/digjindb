@@ -279,19 +279,34 @@ def cpu_snapshot() -> tuple[int, int] | None:
     return None
 
 
-def cpu_percent(interval: float = 0.12) -> float:
-    """两次采样的差值算 CPU 占用率; 采样不到返回 ``-1``."""
+def cpu_percent(interval: float = 0.25) -> float:
+    """两次采样的差值算 CPU 占用率; 采样不到返回 ``-1``.
+
+    用户 m17937: 以前窗口只有 0.12 秒, 在空闲的小机器上两次采样常常
+    **一个 jiffy 都没过去** (``/proc/stat`` 的计数粒度是 10ms, 但内核
+    攒够一个 tick 才会动), ``total_delta == 0`` 于是返回 -1, 看板就永远
+    显示「—」。现在窗口放宽到 0.25 秒, 并且差值还是 0 时再补采一次
+    (最多多等 0.5 秒), 宁可慢一点也要给出真数字。
+    """
     first = cpu_snapshot()
     if first is None:
         return -1.0
-    time.sleep(max(0.0, min(0.5, interval)))
+    time.sleep(max(0.0, min(1.0, interval)))
     second = cpu_snapshot()
     if second is None:
         return -1.0
     idle_delta = second[0] - first[0]
     total_delta = second[1] - first[1]
     if total_delta <= 0:
-        return -1.0
+        # 一个 tick 都没走: 再等一会儿。仍是 0 就只能认"读不到"。
+        time.sleep(0.5)
+        third = cpu_snapshot()
+        if third is None:
+            return -1.0
+        idle_delta = third[0] - first[0]
+        total_delta = third[1] - first[1]
+        if total_delta <= 0:
+            return -1.0
     busy = 100.0 * (total_delta - idle_delta) / total_delta
     return max(0.0, min(100.0, busy))
 
