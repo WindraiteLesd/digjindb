@@ -594,12 +594,12 @@ def layout(
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
 <title>{esc(title)} · {esc(ctx.site_name)}</title>
-<link rel="stylesheet" href="/static/public.css?v=84">
+<link rel="stylesheet" href="/static/public.css?v=85">
 <!-- ?v=2: 图标换过, 但静态资源被 CF/浏览器缓存 1 天, 加版本号强制刷新 -->
 <link rel="icon" href="/static/favicon.svg?v=2" type="image/svg+xml">
 <!-- 唯一的脚本: 同源外链, 只做渐进增强(CSP 只给 script-src 'self') -->
-<script src="/static/public.js?v=73" defer></script>
-<script src="/static/cover-crop.js?v=7" defer></script>
+<script src="/static/public.js?v=74" defer></script>
+<script src="/static/cover-crop.js?v=8" defer></script>
 <script src="/static/infobox.js?v=11" defer></script>
 </head>
 <body{_bg_attr(ctx)}>
@@ -613,7 +613,7 @@ def layout(
       <span class="brand-text">{esc(ctx.site_name)}<small>{esc(ctx.tagline)}</small></span>
     </a>
     <form class="searchbar" action="/albums" method="get" role="search">
-      <input type="search" name="q" value="{search_value}" placeholder="搜索标题 / 社团 / 艺人 / 曲目 / 编号"
+      <input type="search" name="q" value="{search_value}" placeholder="搜索标题 / 社团 / 艺人 / 曲目 / 碟名 / 编号"
              aria-label="搜索专辑" autocomplete="off">
       <button type="submit">搜索</button>
     </form>
@@ -936,7 +936,7 @@ def filter_panel(
         query_field = (
             '<label class="field"><span>关键词</span>'
             f'<input type="search" name="q" value="{esc(filters.get("q") or "")}"'
-            ' placeholder="标题 / 社团 / 艺人 / 曲目 / 编号"></label>'
+            ' placeholder="标题 / 社团 / 艺人 / 曲目 / 碟名 / 编号"></label>'
         )
 
     kind_field = (
@@ -2647,7 +2647,7 @@ def about_page(ctx: SiteContext, *, stats: Mapping[str, Any] = {}) -> str:
   <h2 class="section-title">DoujinDigDatabase是一个同人音乐专辑挖掘数据库。</h2>
   <h2 class="section-title">怎么用</h2>
   <ul>
-    <li><a href="/albums">浏览</a>: 可按展会、类型、年份、标签、封面分类进行筛选, 或者搜索标题 / 社团 / 艺人 / 曲目 / 编号;</li>
+    <li><a href="/albums">浏览</a>: 可按展会、类型、年份、标签、封面分类进行筛选, 或者搜索标题 / 社团 / 艺人 / 曲目 / 碟名 / 编号;</li>
     <li><a href="/events">展会</a> 与 <a href="/circles">社团</a>: 按展会或社团成批查看;</li>
     <li><a href="/tags">标签</a>: 字号越大表示收录越多;</li>
     <li><a href="/stats">看板</a>: 数量、年份与展会分布{board_extra}。</li>
