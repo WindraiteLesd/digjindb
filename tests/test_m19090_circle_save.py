@@ -60,31 +60,38 @@ class TestActivityTypeTolerated(unittest.TestCase):
 
 
 class TestCircleFormsUseSelect(unittest.TestCase):
-    """两个入口都渲染成下拉, 选项就是那四个."""
+    """两个入口都是「文本框 + datalist 候选」.
+
+    用户 m19886: 活动类型要能自己填写, 光给 东方 / 原创 / 两者 不够用。
+    所以这里既要有 ``<input type="text" list=...>``, 也要有候选列表。
+    """
 
     def _options(self, html: str) -> list[str]:
-        match = re.search(r'<select name="activity_type">(.*?)</select>', html, re.S)
-        self.assertIsNotNone(match, "活动类型应该是 <select>")
+        match = re.search(r'<datalist id="[^"]*">(.*?)</datalist>', html, re.S)
+        self.assertIsNotNone(match, "活动类型应该带一个 <datalist> 候选表")
         return re.findall(r'<option value="([^"]*)"', match.group(1))
 
-    def test_new_page_has_select(self) -> None:
+    def test_new_page_has_free_text_input(self) -> None:
         html = T.new_entity_page(_ctx(), "circle")
-        self.assertNotIn('name="activity_type" type="text"', html)
-        self.assertEqual(["", "touhou", "original", "both"], self._options(html))
+        self.assertNotIn('<select name="activity_type"', html)
+        self.assertIn('name="activity_type"', html)
+        self.assertIn('list="dl-new-activity_type"', html)
+        self.assertEqual(["touhou", "original", "both"], self._options(html))
         # 旧提示会引导用户填错, 必须消失
         self.assertNotIn("同人社团 / 企业", html)
 
-    def test_edit_page_has_select(self) -> None:
+    def test_edit_page_has_free_text_input(self) -> None:
         html = T.edit_profile_page(_ctx(), "circle", "某社团",
                                    values={"name": "某社团", "activity_type": "touhou"})
-        self.assertEqual(["", "touhou", "original", "both"], self._options(html))
-        self.assertIn('<option value="touhou" selected>', html)
+        self.assertNotIn('<select name="activity_type"', html)
+        self.assertIn('<input type="text" name="activity_type" value="touhou"', html)
+        self.assertEqual(["touhou", "original", "both"], self._options(html))
 
-    def test_edit_page_keeps_legacy_value_selectable(self) -> None:
+    def test_edit_page_keeps_legacy_value(self) -> None:
         """库里存着旧自由文本时不能被悄悄改成「未填」."""
         html = T.edit_profile_page(_ctx(), "circle", "某社团",
                                    values={"name": "某社团", "activity_type": "同人社团"})
-        self.assertIn('<option value="同人社团" selected>', html)
+        self.assertIn('name="activity_type" value="同人社团"', html)
 
 
 class _SiteCase(unittest.TestCase):
