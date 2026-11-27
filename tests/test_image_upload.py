@@ -193,7 +193,9 @@ class TestSeriesImageUpload(unittest.TestCase):
         self.assertEqual(self.site._save_series_image("M3", "logo", values), "")
 
     def test_oversize_rejected(self) -> None:
-        big = b"\x89PNG" + b"0" * (3 * 1024 * 1024)
+        # 用户 m18831: 图片上限提到 8MB, 要超过新上限才会被拒
+        from dddb.public.site import MAX_IMAGE_BODY
+        big = b"\x89PNG" + b"0" * (MAX_IMAGE_BODY + 1024)
         headers, body = _multipart(
             {"name": "M3"},
             {"logo": ("big.png", "image/png", big)})
