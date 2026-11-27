@@ -604,13 +604,13 @@ def layout(
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
 <title>{esc(title)} · {esc(ctx.site_name)}</title>
-<link rel="stylesheet" href="/static/public.css?v=87">
+<link rel="stylesheet" href="/static/public.css?v=88">
 <!-- ?v=2: 图标换过, 但静态资源被 CF/浏览器缓存 1 天, 加版本号强制刷新 -->
 <link rel="icon" href="/static/favicon.svg?v=2" type="image/svg+xml">
 <!-- 唯一的脚本: 同源外链, 只做渐进增强(CSP 只给 script-src 'self') -->
 <script src="/static/public.js?v=76" defer></script>
 <script src="/static/cover-crop.js?v=9" defer></script>
-<script src="/static/infobox.js?v=11" defer></script>
+<script src="/static/infobox.js?v=12" defer></script>
 </head>
 <body{_bg_attr(ctx)}>
 <a class="skip" href="#content">跳到正文</a>
@@ -1430,6 +1430,13 @@ def album_detail_page(
         row(i18n.translate("field.booth", ctx.lang), " ".join(p for p in (album.get("hall"), album.get("booth")) if p)),
         row(i18n.translate("field.catalog_no", ctx.lang), album.get("catalog_no")),
         row(i18n.translate("field.price", ctx.lang), album.get("price")),
+        # 用户 m19622: 这几个字段填过却哪里都看不到, 看着像"填了会丢"
+        row(i18n.translate("field.original_work", ctx.lang, "原作"),
+            album.get("original_work")),
+        row(i18n.translate("field.producer", ctx.lang, "制作人"),
+            album.get("producer")),
+        row(i18n.translate("field.platform", ctx.lang, "发布平台"),
+            album.get("platform")),
         # 用时间戳 + 页面语言格式化, 避免数据层默认时区(zh)与页面不一致
         row(i18n.translate("detail.updated", ctx.lang),
             _album_updated_text(album, ctx.lang)),
@@ -1992,7 +1999,7 @@ def event_series_edit_page(
             '<input type="file" name="{kind}" accept="image/png,image/jpeg,image/webp">'
             '<input type="text" name="{url_key}" value="{remote}"'
             ' placeholder="或填图片 URL">'
-            '<p class="field-hint">PNG / JPEG / WebP，≤2MB；上传优先于 URL</p>'
+            '<p class="field-hint">PNG / JPEG / WebP，≤8MB；上传优先于 URL</p>'
             '</div></div></div>'
         ).format(label=esc(label), preview=preview, kind=esc(kind),
                  url_key=esc(url_key), remote=esc(remote))
@@ -2933,7 +2940,7 @@ def new_entity_page(
         upload_html = (
             '<section class="panel"><h2 class="section-title">' + label + "</h2>"
             '<p class="section-note">图片保存在本站云端。</p>'
-            '<label class="field"><span>上传' + label + '(PNG/JPEG/WebP, ≤2MB)</span>'
+            '<label class="field"><span>上传' + label + '(PNG/JPEG/WebP, ≤8MB)</span>'
             '<input type="file" name="' + field_name + '"'
             ' accept="image/png,image/jpeg,image/webp">'
             "</label></section>"
@@ -5578,8 +5585,15 @@ def edit_album_page(
     )
 
     def _bind(name: str, label: str, option_kind: str, *,
-              hint: str = "回车分隔多个", suggest_all: bool = False) -> str:
-        """与新建页一致的绑定输入(多值 + 有输入才出候选 + 带头像)."""
+              hint: str = "回车分隔多个", suggest_all: bool = False,
+              bind_kind: str = "") -> str:
+        """与新建页一致的绑定输入(多值 + 有输入才出候选 + 带头像).
+
+        ``bind_kind`` 用于 ``data-bind``, 默认与候选来源 ``option_kind`` 相同。
+        用户 m19622: 制作人复用艺人的候选, 但它**不是**艺人栏位 ——
+        ``data-bind`` 仍写 ``producer``, 免得把「艺人不再是绑定栏位」这条
+        约定(以及相应的回归测试)顶掉。
+        """
         current = str(values.get(name) or "")
         options = "".join(
             '<button type="button" class="suggest-item" data-value="{v}"'
@@ -5591,7 +5605,7 @@ def edit_album_page(
             for item in (bind_options.get(option_kind) or ())
         )
         return (
-            f'<label class="field auth-field bind-field" data-bind="{esc(option_kind)}"'
+            f'<label class="field auth-field bind-field" data-bind="{esc(bind_kind or option_kind)}"'
             f'{"" if not suggest_all else " data-suggest-all=\"1\""}'
             ">"
             f'<span>{esc(label)}<span class="field-hint">{esc(hint)}</span></span>'
@@ -5710,9 +5724,9 @@ def edit_album_page(
             '<p class="cover-picked" id="cover-picked"></p>'
             '<button type="button" class="btn-ghost btn-xs cover-upload-btn"'
             ' data-cover-pick="1">上传封面</button>'
-            '<p class="field-hint">PNG / JPEG / WebP，≤2MB；'
+            '<p class="field-hint">PNG / JPEG / WebP，≤8MB；'
             '保存后随专辑一起创建。「＋」可以再加其他照片（不含封面），'
-            '每张最多 2MB，最多 12 张</p>'
+            '每张最多 8MB，最多 12 张</p>'
             '</div>'
             '<div class="photo-list" data-photo-list="1"></div>'
             '</div>'
@@ -5746,7 +5760,7 @@ def edit_album_page(
             f'<p class="cover-picked" id="cover-picked"></p>'
             f'<button type="button" class="btn-ghost btn-xs cover-upload-btn"'
             f' data-cover-upload="1">上传封面</button>'
-            f'<p class="field-hint">PNG / JPEG / WebP，≤2MB</p>'
+            f'<p class="field-hint">PNG / JPEG / WebP，≤8MB</p>'
             f'</div></div>'
             # **其他照片**: 不含封面, 可加备注
             + _photos_html(key, ctx, album)
@@ -5772,8 +5786,11 @@ def edit_album_page(
     # 原作(original_work)两侧都要 —— 依附于某个 IP 的同人作品(原创留空)。
     _release_kind = str(values.get("release_kind") or "").strip().lower()
     if _release_kind not in ("event", "indie"):
-        # 没选过: 有展会就算同人展侧, 否则算独立侧(仅影响默认选中项)
-        _release_kind = "event" if str(values.get("event") or "").strip() else "indie"
+        # 没选过(新建页最常见): 默认同人展侧(用户 m19622)。
+        # 只有填了发布平台、又没填展会时, 才认为这是独立同人侧。
+        _has_platform = bool(str(values.get("platform") or "").strip())
+        _has_event = bool(str(values.get("event") or "").strip())
+        _release_kind = "indie" if (_has_platform and not _has_event) else "event"
     _kind_radio = (
         '<div class="release-kind" data-release-kind-pick="1">'
         '<label class="release-kind-opt"><input type="radio" name="release_kind"'
@@ -5785,7 +5802,10 @@ def edit_album_page(
              " checked" if _release_kind == "indie" else "")
     _info_shared = (
         _bind("circle", "社团 / 出品方", "circle")
-        + _text_input(values, errs, "producer", "制作人", hint="个人名义出品时填这里")
+        # 用户 m19622: 制作人以前是单行文本框, 填多个就只剩一行、
+        # 而且和社团那种 chip 输入不一致 —— 改成同一个绑定组件
+        # (候选复用艺人列表, 也可以直接敲新名字)。
+        + _bind("producer", "制作人", "artist", bind_kind="producer")
         + _text_input(values, errs, "original_work", "原作",
                       hint="原创留空")
         + _text_input(values, errs, "release_date", "发售日",
