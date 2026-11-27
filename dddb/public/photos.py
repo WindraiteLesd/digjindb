@@ -31,7 +31,8 @@ from typing import Any
 #: 附图上限(张)
 MAX_PHOTOS = 24
 #: 单张附图大小上限
-MAX_PHOTO_BYTES = 4 * 1024 * 1024
+#: 用户 m18831: 和封面同一个上限(以前 4MB)
+MAX_PHOTO_BYTES = 8 * 1024 * 1024
 
 
 def _nm(v: Any) -> str:
