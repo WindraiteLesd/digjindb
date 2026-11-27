@@ -126,7 +126,9 @@ class TestPlusIsPhotoEntry(unittest.TestCase):
         js = CROP.read_text(encoding="utf-8")
         idx = js.find("edit-cover-thumb")
         self.assertGreater(idx, 0)
-        window = js[idx:idx + 500]
+        # 窗口要足够长: 用户 m18302 起这段点击处理前面多了一段注释
+        # (说明「放大」按钮要放行), 写死 500 字符会截在注释里。
+        window = js[idx:idx + 900]
         self.assertIn('pick("cover")', window)
 
 
