@@ -5837,8 +5837,11 @@ class PublicSite:
                 current.pop("updated_at", None)
                 store.upsert_artist(name, current)
             else:
-                from dddb.models import Circle
-                store.upsert_circle(Circle.from_dict({"name": name, "logo_url": url}))
+                # 用户 m19886: 这里以前是 upsert_circle(Circle.from_dict({name, logo_url})),
+                # 整条替换 —— 只上传一张徽标就把简介/活动类型/成员全清空了。
+                # 改走局部更新, 只动 logo 两个字段。
+                store.update_circle_fields(
+                    name, {"logo_url": url, "logo_local": ""}, create=True)
         finally:
             store.close()
 
@@ -6446,14 +6449,35 @@ class PublicSite:
         if kind == "circle":
             detail = self.data.circle_detail(name) or {}
             links = "\n".join(f'{x.get("text")}: {x.get("href")}' for x in detail.get("links") or [])
+            # 用户 m19886: 成员名单和「最后活动」都要按**库里存的**回填。
+            #   * 以前 staff 恒为空串, 编辑页成员框永远是空的 —— 用户一保存
+            #     (现在是局部更新) 就把 circle_staff 整组清空;
+            #   * last_active 以前取的是最新专辑日期 (detail["last_date"]),
+            #     不是库里那个字段, 每保存一次就被专辑日期覆盖。
+            # 注意不能用 circle_detail() 的 members/former_members —— 那是从
+            # 专辑 credits 猜出来的, 回填会把推断结果写成权威数据。
+            last_active = ""
+            staff_text = ""
+            if self.db_path is not None:
+                from dddb.db import Store as _Store
+                _store = _Store(self.db_path)
+                try:
+                    _circle = _store.get_circle(detail.get("name") or name)
+                    if _circle is not None:
+                        last_active = str(_circle.last_active or "")
+                        staff_text = "\n".join(
+                            "{}: {}".format(person.role, person.name)
+                            for person in _circle.staff)
+                finally:
+                    _store.close()
             return {
                 "name": detail.get("name") or name,
                 "activity_type": detail.get("activity_type") or "",
                 "founded": detail.get("founded") or "",
-                "last_active": detail.get("last_date") or detail.get("last_event") or "",
+                "last_active": last_active,
                 "description": detail.get("description") or "",
                 "urls": links,
-                "staff": "",
+                "staff": staff_text,
             }
         if kind in ("event", "tag"):
             from dddb.db import Store as _Store
@@ -6565,14 +6589,36 @@ class PublicSite:
                     return self._html(self.forbidden(state, message), status=400,
                                       cookies=cookies)
             elif kind == "circle":
-                store.upsert_circle(Circle.from_dict({
-                    "name": name,
+                # 用户 m19886: 以前这里用 ``upsert_circle(Circle.from_dict(...))``,
+                # 那是**整条替换** —— 表单里没有的字段(简介 / 徽标 / 成员)全被清空。
+                # 用户只是改了下活动类型, 简介就没了。改成**局部更新**:
+                # 只把表单真带了的字段写回去, 其余保持库里原值。
+                patch: dict[str, Any] = {
                     "activity_type": text_field(values, "activity_type").strip(),
                     "founded": text_field(values, "founded").strip(),
                     "last_active": text_field(values, "last_active").strip(),
-                    "description": text_field(values, "description").strip(),
-                    "urls": self._parse_urls(text_field(values, "urls")),
-                }))
+                }
+                if "description" in values:
+                    patch["description"] = text_field(values, "description").strip()
+                if "urls" in values:
+                    patch["urls"] = self._parse_urls(text_field(values, "urls"))
+                if "staff" in values:
+                    _staff: list[dict[str, str]] = []
+                    for _line in text_field(values, "staff").splitlines():
+                        _line = _line.strip()
+                        if not _line:
+                            continue
+                        _role, _, _who = (_line.partition(":") if ":" in _line
+                                          else _line.partition("："))
+                        if _who.strip():
+                            _staff.append({"role": _role.strip(),
+                                           "name": _who.strip()})
+                    patch["staff"] = _staff
+                ok, message = store.update_circle_fields(
+                    name, patch, create=True)
+                if not ok:
+                    return self._html(self.forbidden(state, message), status=400,
+                                      cookies=cookies)
             elif kind == "event":
                 try:
                     year = int(text_field(values, "year").strip() or 0)
