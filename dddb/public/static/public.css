@@ -104,6 +104,29 @@ a:hover { text-decoration: underline; }
 .nav-link:hover { background: var(--panel); color: var(--text); text-decoration: none; }
 .nav-link.is-active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
 
+/* 站务下拉(用户 m17937): 审核队列/用户管理/数据看板收进一个 <details>,
+   其余导航保持不变 —— 站务账号在手机上才不会被挤出去.
+   没有 JS 也能用: <details>/<summary> 是原生开合. */
+.nav-more { position: relative; }
+.nav-more > summary { list-style: none; cursor: pointer; user-select: none; }
+.nav-more > summary::-webkit-details-marker { display: none; }
+.nav-more > summary::marker { content: ""; }
+.nav-more > summary::after { content: " ▾"; font-size: 11px; opacity: .7; }
+.nav-more[open] > summary { background: var(--panel); color: var(--text); }
+.nav-more-menu {
+  position: absolute; top: calc(100% + 6px); left: 0; z-index: 60;
+  display: flex; flex-direction: column; gap: 2px; min-width: 132px;
+  padding: 6px; border-radius: 12px;
+  background: var(--panel); border: 1px solid var(--line);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, .35);
+}
+.nav-more-item {
+  display: block; padding: 7px 10px; border-radius: 8px;
+  color: var(--text-dim); font-size: 13.5px; white-space: nowrap;
+}
+.nav-more-item:hover { background: var(--panel-hover, var(--accent-soft)); color: var(--text); text-decoration: none; }
+.nav-more-item.is-active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+
 .totals-strip {
   display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
   padding-bottom: 10px; font-size: 12.5px; color: var(--muted);
@@ -1328,14 +1351,16 @@ body::before {
 
 @media (max-width: 860px) {
   .topbar-inner { flex-wrap: wrap; gap: 8px; }
+  /* 用户 m17937: 以前是 nowrap + 横向滚动, 站务账号还是"看起来超出屏幕".
+     站务入口收进下拉后链接变少, 直接换行展开即可 —— 全部可见, 也不用
+     横着划; 而且 overflow-x:auto 会把下拉菜单裁掉, 换行顺带解决这个。 */
   .nav {
-    display: flex; flex-wrap: nowrap; gap: 4px;
-    width: 100%; overflow-x: auto; overflow-y: hidden;
-    -webkit-overflow-scrolling: touch;
-    scrollbar-width: none; padding-bottom: 2px;
+    display: flex; flex-wrap: wrap; gap: 4px;
+    width: 100%; overflow: visible;
+    padding-bottom: 2px;
   }
-  .nav::-webkit-scrollbar { display: none; }
   .nav-link { flex: 0 0 auto; white-space: nowrap; font-size: 13px; padding: 6px 9px; }
+  .nav-more-menu { position: absolute; left: auto; right: 0; min-width: 124px; }
   .searchbar { width: 100%; order: 3; }
   .searchbar input { width: 100%; min-width: 0; }
   .totals-strip { flex-wrap: wrap; gap: 6px; }
