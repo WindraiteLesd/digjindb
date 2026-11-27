@@ -388,9 +388,11 @@
     var s = d.single;
     var filled = [];
 
+    /* producer 不在这里: 用户 m19622 起它是 bind 控件(可填多个),
+       走下面多值那一段。 */
     ["title_original", "title", "title_romaji", "circle", "company",
      "event", "release_date", "catalog_no", "price", "hall", "booth",
-     "original_work", "producer", "platform"]
+     "original_work", "platform"]
       .forEach(function (k) {
         if (!s[k]) { return; }
         // circle / event 是 bind 控件(可能多值), 其余是普通文本框
@@ -414,6 +416,14 @@
         filled.push(k);
       }
     });
+
+    /* 制作人: 用户 m19622 起它也是 bind 控件(可填多个), 必须走
+       setBindField 重建 chips —— 只写隐藏域, 之后任何一次增删都会
+       把这里填的值覆盖回去。 */
+    if (s.producer) {
+      var producerParts = String(s.producer).split(/\s*[\/、]\s*/).filter(Boolean);
+      if (setBindField("producer", producerParts)) { filled.push("producer"); }
+    }
 
     // 外链: 行数不够就先补行(否则多出来的链接全丢)
     if (d.links.length) {
