@@ -2029,8 +2029,15 @@ class PublicSite:
         state: Any,
         headers: Mapping[str, Any] | None,
         client_ip: str,
+        method: str = "GET",
+        status: int = 0,
     ) -> None:
-        """记一行访问日志. **尽力而为**, 任何异常都不许冒到请求里."""
+        """记一行访问日志. **尽力而为**, 任何异常都不许冒到请求里.
+
+        用户 m19090: 以前这里的 ``method`` 写死成 ``"GET"``、``status`` 根本没传,
+        于是「新建社团保存失败」这种事在看板上**一点痕迹都没有** —— 全是 GET,
+        分不清哪次是提交。现在 method/status 由调用方传真实值。
+        """
         record = getattr(self.visit_store(), "record", None)
         if not callable(record):
             return
@@ -2039,7 +2046,8 @@ class PublicSite:
             record(
                 path=str(path or "/")[:300],
                 route=str((route or {}).get("name") or ""),
-                method="GET",
+                method=str(method or "GET").upper(),
+                status=int(status or 0),
                 user_id=int(user.get("id") or 0),
                 username=str(user.get("username") or ""),
                 client_ip=str(client_ip or ""),
@@ -2352,8 +2360,11 @@ class PublicSite:
                 response = self._handle_write(verb, route, state, headers, body, extra_cookies)
             # 访问日志(站务看板): 只记页面级请求, 静态资源和图片不记,
             # 否则一张专辑页就会刷出十几个"访问"。
+            # 用户 m19090: 把真实的 method/status 也记上 —— 以前一律 "GET",
+            # 保存失败的 POST 在看板上完全看不出来。
             if not head and route.get("name") not in _NO_VISIT_ROUTES:
-                self._record_visit(path, route, state, headers, client_ip)
+                self._record_visit(path, route, state, headers, client_ip,
+                                   method=verb, status=int(getattr(response, "status", 0) or 0))
         except (sqlite3.Error, PublicDataError, UserStoreError) as exc:
             logger.warning("处理 %s %s 失败: %s", verb, path, exc)
             response = Response.html(
@@ -6067,8 +6078,16 @@ class PublicSite:
                            state: auth.AuthState, cookies: list[str],
                            exc: BaseException) -> Response:
         """把"没建成功"渲染成**带原值的新建表单**(而不是一个错误页)."""
+        # 用户 m19090: 以前这里只说"没有保存成功", 具体原因只进了日志 ——
+        # 用户(aslovt)看到的就是"社团建不了"却完全不知道为什么。异常里的
+        # 一句话(message, 通常是 ValueError 的说明)要原样给他看。
+        reason = str(exc or "").strip()
+        if len(reason) > 200:
+            reason = reason[:200] + "…"
         note = ("没有保存成功。下面是你刚才填的内容(服务端已原样保留), "
                 "检查后可以直接再点一次保存。")
+        if reason:
+            note = f"没有保存成功：{reason}。下面是你刚才填的内容(服务端已原样保留)。"
         html = ""
         try:
             if kind == "album":
