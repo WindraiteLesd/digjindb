@@ -235,16 +235,22 @@ def normalize_staff_role(value: Any) -> str:
 
 
 def normalize_activity_type(value: Any) -> str:
-    """把自由填写的主要活动类型归一到 :data:`CIRCLE_ACTIVITY_TYPES` 里的 key."""
+    """把自由填写的主要活动类型归一到 :data:`CIRCLE_ACTIVITY_TYPES` 里的 key.
+
+    认不出来的写法**原样保留**, 不再抛异常(用户 m19090): 新建社团页以前的
+    提示写的是「同人社团 / 企业 等」, 用户照着填 ``同人社团`` 就撞
+    ``ValueError: 无法识别的活动类型`` —— 结果是整个社团一条都没落库, 用户
+    只看到"未能保存"却不知道错在哪。活动类型只是个展示标签, 存原文比让
+    整次保存失败有用得多; 真正认识的写法仍然归一成 key(显示时走
+    :data:`CIRCLE_ACTIVITY_LABELS`)。
+    """
     raw = _clean_str(value)
     if not raw:
         return ""
     key = raw.lower().replace("＋", "+")
     if key in _CIRCLE_ACTIVITY_ALIASES:
         return _CIRCLE_ACTIVITY_ALIASES[key]
-    raise ValueError(
-        f"无法识别的活动类型: {value!r}（可用 东方 / 原创 / 两者, 或留空）"
-    )
+    return raw
 
 
 #: 宽松日期解析: 2020 / 2020-03 / 2020/03/15 / 2020年3月 / 2020.3.15 都认。
