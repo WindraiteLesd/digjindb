@@ -280,7 +280,13 @@ a:hover { text-decoration: underline; }
   background: var(--panel); border: 1px solid var(--border-soft);
   border-radius: var(--radius); padding: 14px; display: grid; gap: 10px;
 }
-.filters-inline { grid-template-columns: 260px auto; align-items: end; margin-bottom: 14px; }
+/* 用户 m19354: 搜索框以前固定 260px, 而按钮被 .field-actions button 的
+   flex:1 1 auto 撑满剩下整条 —— 看着就是「输入框小、按钮过大」。
+   改成输入框吃掉剩余宽度, 按钮按自身内容宽度排。 */
+.filters-inline { grid-template-columns: minmax(0, 1fr) auto; align-items: end; margin-bottom: 14px; }
+.filters-inline .field-actions { flex-wrap: nowrap; }
+.filters-inline .field-actions button { flex: 0 0 auto; padding: 7px 16px; }
+.filters-inline .field-actions .btn-ghost { padding: 7px 14px; }
 .field { display: grid; gap: 5px; font-size: 12.5px; color: var(--muted); }
 .field select, .field input[type="search"] {
   background: var(--bg-soft); color: var(--text);
