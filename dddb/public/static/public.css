@@ -1499,7 +1499,7 @@ body::before {
 }
 
 /* 文件选择器收窄: 它默认会占满整行, 显得特别大 */
-
+@media (max-width: 640px) {
   .cover-form { flex: 1 1 100%; max-width: none; }
 }
 
@@ -1636,14 +1636,6 @@ img[src^="/avatar/"] {
 }
 
 /* 曲目: 碟号列 + 添加行按钮 */
-
-
-/* 新加的行给一点视觉提示, 方便用户定位 */
-  to { opacity: 1; transform: none; }
-}
-
-@media (max-width: 860px) {
-}
 
 /* ==========================================================================
    曲目表: 按碟分组的表格式布局(参考网易云唱片编辑界面)
@@ -2422,6 +2414,7 @@ tr.track-item.is-open .track-toggle { transform: rotate(90deg); }
   position: absolute;
   right: 6px;
   bottom: 6px;
+  z-index: 3;
   padding: 2px 8px;
   border-radius: 6px;
   border: 1px solid var(--line, #2a2f3a);
@@ -2429,10 +2422,13 @@ tr.track-item.is-open .track-toggle { transform: rotate(90deg); }
   color: #fff;
   font-size: 11px;
   cursor: zoom-in;
-  opacity: 0;
+  /* 用户 m18302: 以前 opacity: 0 只在 hover 时露面, 手指/触屏永远点不到;
+     现在常显(半透明), 鼠标移上去完全不透明。 */
+  opacity: .72;
   transition: opacity .15s ease;
 }
-.edit-cover-thumb:hover .edit-cover-zoom { opacity: 1; }
+.edit-cover-thumb:hover .edit-cover-zoom,
+.edit-cover-zoom:focus-visible { opacity: 1; }
 .edit-cover-row .edit-cover-img,
 .edit-cover-thumb .edit-cover-img { cursor: zoom-in; }
 
@@ -3043,15 +3039,20 @@ tr.track-item.is-open .track-toggle { transform: rotate(90deg); }
 
   /* 展开的补充信息: 整行
      用户 m17600: 这里以前是 display: table-row —— 手机上没有 table 容器,
-     匿名表格会按 min-content 收缩, 于是「翻译歌名」被压成一列单字。改成块级。 */
-  .tracklist tr.track-extra-row { display: block; }
+     匿名表格会按 min-content 收缩, 于是「翻译歌名」被压成一列单字。改成块级。
+     用户 m18302: 只改 display 还不够 —— tr 变成 block 之后里面的 td 是
+     普通块盒, 宽度会按内容收缩, 于是展开区只占左边一小条、右边全是空白。
+     这里把 tr 和 td 都撑满, 并让内层的 flex 容器也拿到完整宽度。 */
+  .tracklist tr.track-extra-row { display: block; width: 100%; }
   .tracklist tr.track-extra-row > td {
     display: block;
-    width: auto;
+    width: 100%;
+    box-sizing: border-box;
     white-space: normal;
     padding: 8px 10px;
   }
   .tracklist tr.track-extra-row > td:first-child { display: none; }
+  .tracklist tr.track-extra-row > td > .track-extra { width: 100%; }
 }
 
 /* 更窄的手机: 序号/时长缩小, 保证曲名有空间 */
