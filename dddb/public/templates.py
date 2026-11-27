@@ -2743,11 +2743,16 @@ NEW_ENTITY_SPECS: dict[str, tuple[str, list[tuple[str, str, str, str]]]] = {
     ]),
     "circle": ("新建社团", [
         ("name", "社团名", "text", ""),
-        # 活动类型是**有限选项**(东方 / 原创 / 两者), 不是自由文本 ——
-        # 以前提示写「同人社团 / 企业 等」, 用户照着填就撞 ValueError(用户 m19090)
-        ("activity_type", "活动类型", "activity", ""),
+        # 活动类型: 用户 m19886 要求**能自己填写**(只有 东方/原创/两者 不够用),
+        # 但后端 `normalize_activity_type` 早就认未知值(存原文), 所以这里是
+        # 「文本框 + datalist 候选」, 既能点也能自己写。
+        ("activity_type", "活动类型", "activity", "可自由填写"),
         ("founded", "成立时间", "text", ""),
         ("last_active", "最后活动", "text", ""),
+        # 简介以前不在字段表里 -> 编辑页不渲染、提交时被当成空串, 而
+        # `upsert_circle` 是整条替换, 于是「改个活动类型就丢掉简介」
+        # (用户 m19886)。补上这个字段。
+        ("description", "简介", "textarea", ""),
         ("urls", "相关链接", "textarea", "每行: 标签: URL"),
         ("staff", "成员", "textarea", "每行: 角色: 名字"),
     ]),
@@ -2858,20 +2863,15 @@ def edit_profile_page(
                 '<option value="">(按会次名自动识别)</option>{opts}</select>'
             ).format(key=esc(key), opts=opts)
         elif field_type == "activity":
-            # 活动类型是有限选项 -> 下拉(用户 m19090: 自由文本会让整条保存失败)
-            known = {str(item.get("value") or "") for item in CIRCLE_ACTIVITY_CHOICES}
-            choices = list(CIRCLE_ACTIVITY_CHOICES)
-            if value and value not in known:
-                # 库里存着旧版的自由文本(比如「同人社团」) —— 也要能选中,
-                # 否则一进编辑页就被悄悄改成「未填」。
-                choices.append({"value": value, "text": value})
+            # 用户 m19886: 活动类型要能自己填 —— 所以是带候选的文本框, 不是下拉。
             opts = "".join(
-                '<option value="{v}"{sel}>{t}</option>'.format(
-                    v=esc(item.get("value") or ""),
-                    sel=" selected" if str(item.get("value") or "") == value else "",
-                    t=esc(item.get("text") or ""))
-                for item in choices)
-            input_html = f'<select name="{esc(key)}">{opts}</select>'
+                '<option value="{v}"></option>'.format(v=esc(item.get("value") or ""))
+                for item in CIRCLE_ACTIVITY_CHOICES if item.get("value"))
+            input_html = (
+                f'<input type="text" name="{esc(key)}" value="{esc(value)}"'
+                ' list="dl-activity-type" autocomplete="off">'
+                f'<datalist id="dl-activity-type">{opts}</datalist>'
+            )
         elif field_type == "textarea":
             input_html = f'<textarea name="{esc(key)}" rows="4"{locked}>{esc(value)}</textarea>'
         else:
@@ -2994,12 +2994,14 @@ def new_entity_page(
         return (f'<label class="field auth-field"><span>{esc(label)}</span>'
                 f'<textarea name="{esc(name)}" rows="5">{esc(field(name))}</textarea></label>')
 
-    def choose(name: str, label: str, options: Sequence[Mapping[str, str]],
-               *, hint: str = "") -> str:
-        """下拉选择 —— 活动类型这种**有限选项**用它, 不让用户自由填写.
+    def pick(name: str, label: str, options: Sequence[Mapping[str, str]],
+             *, hint: str = "") -> str:
+        """带候选的文本框 —— 用户既能点候选, 也能自己写(用户 m19886)。
 
-        用户 m19090: 以前活动类型是文本框、提示写「同人社团 / 企业 等」,
-        用户照着填就撞 ``ValueError``, 整条社团都没存下来。
+        用户 m19090 时这里是 ``choose()`` 下拉, 只给 东方/原创/两者 三个选项;
+        用户 m19886 明确要求「活动类型要能够自己填写」, 而后端
+        ``normalize_activity_type`` 早已认自由文本(未知值原样存), 所以
+        改回 ``<input list=...>`` + ``<datalist>``。
         """
         current = field(name)
         hint_html = f'<span class="field-hint">{esc(hint)}</span>' if hint else ""
@@ -3010,9 +3012,15 @@ def new_entity_page(
                 t=esc(item.get("text") or ""))
             for item in options
         )
+        list_id = "dl-new-" + re.sub(r"[^a-z0-9_-]+", "-", name.lower())
         return (
             f'<label class="field auth-field"><span>{esc(label)}{hint_html}</span>'
-            f'<select name="{esc(name)}">{options_html}</select></label>'
+            f'<input type="text" name="{esc(name)}" value="{esc(current)}"'
+            f' list="{list_id}" autocomplete="off">'
+            f'<datalist id="{list_id}">'
+            + "".join('<option value="{}"></option>'.format(esc(item.get("value") or ""))
+                      for item in options if item.get("value"))
+            + "</datalist></label>"
         )
 
     if kind == "album":
@@ -3077,8 +3085,8 @@ def new_entity_page(
         body_main = (
             '<section class="panel"><h2 class="section-title">社团名</h2><div class="form-grid">'
             + text("name", "社团名", required=True)
-            + choose("activity_type", "活动类型", CIRCLE_ACTIVITY_CHOICES,
-                     hint="留空为未填")
+            + pick("activity_type", "活动类型", CIRCLE_ACTIVITY_CHOICES,
+                   hint="可自由填写")
             + "</div></section>"
             '<section class="panel"><h2 class="section-title">活动</h2><div class="form-grid">'
             + text("founded", "成立时间", input_type="date")
@@ -6321,14 +6329,23 @@ def artists_index_page(
 ) -> str:
     """艺术家列表: 卡片(首字母头像 + 名字 + 专辑数 + 关注数)."""
     pager = pager or {}
+    # 用户 m19886: 有头像就显示头像, 没有才退回首字母占位。
+    def _artist_avatar(item: Mapping[str, Any]) -> str:
+        image = safe_url(item.get("avatar") or "")
+        if image:
+            return ('<img class="artist-avatar" src="{}" alt="" loading="lazy"'
+                    ' decoding="async" referrerpolicy="no-referrer">'.format(esc(image)))
+        return ('<span class="artist-avatar" aria-hidden="true">{}</span>'
+                .format(esc((str(item.get("name") or "")[:1]) or "?")))
+
     cards = "".join(
         '<a class="artist-card" href="/artist/{enc}">'
-        '<span class="artist-avatar" aria-hidden="true">{letter}</span>'
+        '{avatar}'
         '<span class="artist-name">{name}</span>'
         '<span class="artist-meta">{albums} 张专辑 · {followers} 关注</span>'
         "</a>".format(
             enc=esc(quote_segment(item.get("name") or "")),
-            letter=esc((str(item.get("name") or "")[:1]) or "?"),
+            avatar=_artist_avatar(item),
             name=esc(item.get("name") or ""),
             albums=esc(item.get("album_count") or 0),
             followers=esc(item.get("followers") or 0),
