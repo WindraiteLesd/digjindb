@@ -628,6 +628,21 @@ def _first(values: Mapping[str, Any], key: str, default: str = "") -> str:
     return str(value if value is not None else default).strip()
 
 
+def _looks_like_entity_id(text: str) -> bool:
+    """``#12`` / ``albumId:12`` 这种**明确要求**按编号查的写法(用户 m18302).
+
+    纯数字**不算** —— 用户 m18302 搜 "2000" 想找一张叫 2000 的碟, 结果被当成
+    ``entities.id = 2000`` 直接打开另一张专辑, 连搜索结果页都看不到。
+    """
+    value = str(text or "").strip()
+    if not value:
+        return False
+    if value.startswith("#"):
+        return value[1:].strip().isdigit()
+    head, _, tail = value.partition(":")
+    return head.strip().lower() == "albumid" and tail.strip().isdigit()
+
+
 # --------------------------------------------------------------------------
 # 表单解析(纯函数)
 # --------------------------------------------------------------------------
@@ -4423,6 +4438,39 @@ class PublicSite:
             return urllib.parse.unquote("/".join(segments)).strip()
         return urllib.parse.unquote(text).strip()
 
+    def _album_key_from_entity_id(self, raw: str) -> str:
+        """``#12`` / ``albumId:12`` -> 那张专辑的 key; 查不到返回空串.
+
+        用户 m18302: 搜索框只认这两种**明确写法**, 纯数字不再当编号
+        (否则搜 "2000" 会跳进无关专辑)。编号只在搜索一条都没命中时
+        才当兜底试一次, 走的是这里。
+        """
+        text = str(raw or "").strip()
+        if not text:
+            return ""
+        if text.startswith("#"):
+            digits = text[1:].strip()
+        else:
+            head, _, tail = text.partition(":")
+            if head.strip().lower() != "albumid":
+                return ""
+            digits = tail.strip()
+        if not digits.isdigit():
+            return ""
+        number = int(digits)
+        if number <= 0:
+            return ""
+        from dddb.db import Store as _Store
+        store = _Store(self.db_path)
+        try:
+            entity_id, album_key = store.resolve_entity("album", str(number))
+            if not entity_id or not album_key:
+                return ""
+            # entities.name 存的就是专辑 key; 再确认一下这张碟真的还在库里
+            return album_key if store.get_album(album_key) is not None else ""
+        finally:
+            store.close()
+
     def _do_album_comment(self, values: Mapping[str, Any], state: auth.AuthState,
                           cookies: list[str]) -> Response:
         """POST /album/<key>/comment: 任何登录用户都能评论(内容有服务端校验)."""
@@ -5387,16 +5435,17 @@ class PublicSite:
         )
 
     def page_albums(self, params: Mapping[str, Any], state: auth.AuthState | None = None) -> str:
-        # 搜索框也接受**实体编号**: #12 / 12 / albumId:12 -> 直接打开那张专辑
+        # 搜索框也接受**实体编号**, 但**必须写明确的前缀**(用户 m18302):
+        #   #12  /  albumId:12   -> 直接打开那张专辑
+        # 以前纯数字也算编号 —— 用户搜 "2000"(想找一张叫 2000 的碟) 时会被
+        # 当成 entities.id=2000 直接甩进另一张专辑的详情页, 搜索结果页根本
+        # 出不来。改成: 带前缀才直通; 纯数字照常搜索, 只有一条都没搜到
+        # (total == 0) 时才回退成编号查一次, 算个兜底。
         raw_q = _first(params, "q").strip()
-        if raw_q and self.db_path is not None:
-            from dddb.db import Store as _Store
-            _s = _Store(self.db_path)
-            try:
-                entity_id, album_key = _s.resolve_entity("album", raw_q)
-            finally:
-                _s.close()
-            if entity_id and album_key:
+        explicit_id = _looks_like_entity_id(raw_q)
+        if explicit_id and raw_q and self.db_path is not None:
+            album_key = self._album_key_from_entity_id(raw_q)
+            if album_key:
                 _status, html = self.page_album(album_key, state)
                 return html
         filters = parse_filters(params)
@@ -5406,6 +5455,15 @@ class PublicSite:
         # ``sort`` 由 query_albums 单独接, 从筛选参数里剔掉(其余直接透传)
         query_args = {k: v for k, v in filters.items() if k != "sort"}
         views, pager = self.data.query_albums(page=page, per=per, sort=sort, **query_args)
+        # 兜底(用户 m18302): 纯数字一条都没搜到时, 再当成实体编号试一次 ——
+        # 老用户习惯直接敲 12 打开 12 号碟, 前面把「纯数字直通」关掉了,
+        # 这里补回来, 但**只在搜索完全无结果时**生效, 不抢正常搜索的戏。
+        if (raw_q and raw_q.isdigit() and not pager.get("total")
+                and self.db_path is not None):
+            album_key = self._album_key_from_entity_id("#" + raw_q)
+            if album_key:
+                _status, html = self.page_album(album_key, state)
+                return html
         url_for = self._list_url_for("/albums", filters, per)
         subtitle = "共 {} 张专辑".format(pager["total"])
         suggestions: dict[str, Any] | None = None
