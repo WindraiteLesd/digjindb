@@ -1963,6 +1963,78 @@
      新建模式还没有 key, 封面只能随主表单一起提交, 所以不能走裁切弹窗。
      这里只做两件事: 点按钮 -> 打开文件选择; 选完 -> 左侧缩略图预览。
      ========================================================================== */
+  /* 用户 m18831: 单张图上限提到 8MB(服务端 MAX_IMAGE_BODY), 并且超过
+     AUTO_COMPRESS_OVER 的图在**前端先压一次**再传 —— 很多导出封面本来就
+     一两 MB, 以前 2MB 的闸门直接把它们挡在门外。服务端是纯标准库, 没法
+     压图, 所以压缩只能在这里做。 */
+  var MAX_UPLOAD_BYTES = 8 * 1024 * 1024;
+  var AUTO_COMPRESS_OVER = 1200 * 1024;
+  var AUTO_COMPRESS_SIDE = 1600;
+
+  /* 把 File 压成 JPEG Blob(压不动就返回 null, 调用方退回原图)。
+     走 FileReader 而不是 createObjectURL —— CSP 的 img-src 未必放行 blob:。 */
+  function compressImageFile(file, maxSide, quality) {
+    return new Promise(function (resolve) {
+      try {
+        var reader = new FileReader();
+        reader.onload = function () {
+          var img = new Image();
+          img.onload = function () {
+            try {
+              var w = img.naturalWidth || img.width;
+              var h = img.naturalHeight || img.height;
+              if (!w || !h) { resolve(null); return; }
+              var scale = Math.min(1, (maxSide || AUTO_COMPRESS_SIDE) / Math.max(w, h));
+              var cw = Math.max(1, Math.round(w * scale));
+              var ch = Math.max(1, Math.round(h * scale));
+              var canvas = document.createElement("canvas");
+              canvas.width = cw;
+              canvas.height = ch;
+              var g = canvas.getContext("2d");
+              if (!g) { resolve(null); return; }
+              g.fillStyle = "#fff";
+              g.fillRect(0, 0, cw, ch);
+              g.drawImage(img, 0, 0, cw, ch);
+              if (canvas.toBlob) {
+                canvas.toBlob(function (blob) {
+                  resolve(blob || null);
+                }, "image/jpeg", quality || 0.9);
+              } else {
+                resolve(null);
+              }
+            } catch (err) {
+              resolve(null);
+            }
+          };
+          img.onerror = function () { resolve(null); };
+          img.src = String(reader.result || "");
+        };
+        reader.onerror = function () { resolve(null); };
+        reader.readAsDataURL(file);
+      } catch (err) {
+        resolve(null);
+      }
+    });
+  }
+
+  /* 需要时才压: 小图原样返回, 大图压成 JPEG。 */
+  function maybeCompress(file) {
+    if (!file || file.size <= AUTO_COMPRESS_OVER) {
+      return Promise.resolve(file);
+    }
+    return compressImageFile(file).then(function (blob) {
+      if (!blob || !blob.size || blob.size >= file.size) { return file; }
+      try {
+        return new File([blob], String(file.name || "cover").replace(/\.[^.]+$/, "") + ".jpg",
+          { type: "image/jpeg" });
+      } catch (err) {
+        // 老浏览器没有 File 构造器 —— 直接给 Blob, FormData 照样认。
+        blob.__name = "cover.jpg";
+        return blob;
+      }
+    });
+  }
+
   /* 把 data URL 缩到 maxSide 以内再转回 data URL。
      草稿里存的是**预览**, 不需要原始画质 —— 一张 1MB 的封面 base64 后
      1.37M 字符, 按 UTF-16 算就吃不掉 localStorage 的 5MB 配额;
@@ -2062,7 +2134,7 @@
     function addFiles(files) {
       Array.prototype.forEach.call(files, function (file) {
         if (!file || items.length >= MAX) { return; }
-        if (file.size > 2 * 1024 * 1024) { return; }
+        if (file.size > MAX_UPLOAD_BYTES) { return; }
         if (String(file.type || "").indexOf("image/") !== 0) { return; }
         var reader = new FileReader();
         reader.onload = function () {
@@ -2156,8 +2228,8 @@
     input.addEventListener("change", function () {
       var file = input.files && input.files[0];
       if (!file) { return; }
-      if (file.size > 2 * 1024 * 1024) {
-        if (hint) { hint.textContent = "图片不能超过 2MB"; }
+      if (file.size > MAX_UPLOAD_BYTES) {
+        if (hint) { hint.textContent = "图片不能超过 8MB"; }
         input.value = "";
         return;
       }
@@ -2261,8 +2333,8 @@
         input.click();
         return;
       }
-      if (file.size > 2 * 1024 * 1024) {
-        if (hint) { hint.textContent = "图片不能超过 2MB"; }
+      if (file.size > MAX_UPLOAD_BYTES) {
+        if (hint) { hint.textContent = "图片不能超过 8MB"; }
         return;
       }
       var action = wrap.getAttribute("data-cover-action") || "";
@@ -2270,20 +2342,24 @@
       var next = wrap.getAttribute("data-cover-next") || "";
       if (!action) { return; }
 
-      var body = new FormData();
-      body.append("csrf_token", token);
-      body.append("next", next);
-      body.append("cover", file);
-
       button.disabled = true;
       var original = button.textContent;
       button.textContent = "上传中…";
-      if (hint) { hint.textContent = "正在上传…"; }
+      if (hint) {
+        hint.textContent = file.size > AUTO_COMPRESS_OVER
+          ? "正在压缩并上传…" : "正在上传…";
+      }
 
-      fetch(action, {
-        method: "POST",
-        body: body,
-        credentials: "same-origin"
+      maybeCompress(file).then(function (payload) {
+        var body = new FormData();
+        body.append("csrf_token", token);
+        body.append("next", next);
+        body.append("cover", payload, payload === file ? file.name : "cover.jpg");
+        return fetch(action, {
+          method: "POST",
+          body: body,
+          credentials: "same-origin"
+        });
       }).then(function (resp) {
         if (resp.ok) {
           var target = next || window.location.pathname;
