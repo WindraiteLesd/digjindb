@@ -5720,7 +5720,7 @@ def edit_album_page(
     #   独立同人侧(indie): 去掉 展会 / 品番 / 价格 / 展馆 / 展位, 改「发布平台」。
     # 两套用同一批字段(company 只在 event 侧出现, platform 只在 indie 侧出现),
     # 切换靠 release_kind 单选 + JS 显隐; 没脚本时两组都显示(仍可正常保存)。
-    # 原作(original_work)两侧都要 —— 东方 / 蔚蓝档案 / 原神 这类 IP。
+    # 原作(original_work)两侧都要 —— 依附于某个 IP 的同人作品(原创留空)。
     _release_kind = str(values.get("release_kind") or "").strip().lower()
     if _release_kind not in ("event", "indie"):
         # 没选过: 有展会就算同人展侧, 否则算独立侧(仅影响默认选中项)
@@ -5738,7 +5738,7 @@ def edit_album_page(
         _bind("circle", "社团 / 出品方", "circle")
         + _text_input(values, errs, "producer", "制作人", hint="个人名义出品时填这里")
         + _text_input(values, errs, "original_work", "原作",
-                      hint="东方 / 蔚蓝档案 / 原神 这类 IP, 原创留空")
+                      hint="原创留空")
         + _text_input(values, errs, "release_date", "发售日",
                       kind="date", hint="选展会后自动填入")
     )
