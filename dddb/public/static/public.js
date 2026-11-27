@@ -1828,8 +1828,20 @@
     });
   }
 
+  /* 手机宽度: 曲目表已被 CSS 改成 block/grid 卡片, 列宽这套**必须关掉**.
+     用户 m19354: 数据一进来 JS 就把 table.style.width 设成"列宽之和",
+     而窄屏下那个和只有屏幕的一半, 于是"正常显示一瞬间, 然后缩回左半边". */
+  function isNarrowTable() {
+    try {
+      return !!(window.matchMedia && window.matchMedia("(max-width: 820px)").matches);
+    } catch (err) {
+      return false;
+    }
+  }
+
   function setupTableResize() {
     var MIN_COL = 56;
+    if (isNarrowTable()) { return; }
     var tables = document.querySelectorAll("table.tracklist");
     Array.prototype.forEach.call(tables, function (table) {
       var key = "dddb:colw:" + (table.getAttribute("data-key") || "default");
@@ -1912,8 +1924,18 @@
           document.addEventListener("pointerup", up);
         });
       });
-      // 窗口尺寸变化时重新夹紧(窄屏也不会溢出)
+      // 窗口尺寸变化时重新夹紧(窄屏不参与: 那边是卡片布局, 见 isNarrowTable)
       window.addEventListener("resize", function () {
+        if (isNarrowTable()) {
+          // 从宽屏缩到窄屏: 清掉内联宽度, 交还给 CSS, 否则卡片里还留着 px
+          table.style.width = "";
+          table.style.maxWidth = "";
+          table.style.tableLayout = "";
+          Array.prototype.forEach.call(table.querySelectorAll("th, td"), function (cell) {
+            cell.style.width = "";
+          });
+          return;
+        }
         var widths = [];
         Array.prototype.forEach.call(headers, function (h) {
           widths.push(Math.round(h.getBoundingClientRect().width));
