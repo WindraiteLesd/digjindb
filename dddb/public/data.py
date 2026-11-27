@@ -1305,6 +1305,20 @@ class PublicData:
             entry.update(meta.get(name) or {"logo": "", "has_logo": False,
                                             "links": {}})
             out.append(entry)
+        # 用户 m19443: 刚建好的会次可能一张碟都还没有, 以前只按 albums 聚合,
+        # 于是建完跳过去能看到详情页, 回索引却找不到它。
+        known = {item["value"] for item in out}
+        for name, extra in meta.items():
+            if name in known:
+                continue
+            out.append({
+                "value": name,
+                "kind": "",
+                "label": name,
+                "kind_label": "",
+                "count": 0,
+                **extra,
+            })
         return out
 
     def event_kinds(self) -> list[dict[str, Any]]:
@@ -1340,11 +1354,26 @@ class PublicData:
             (int(min_count),),
         )
         items: list[dict[str, Any]] = []
+        known: set[str] = set()
         for row in rows:
             tag = _text(row["tag"])
             if not include_useless and is_useless_tag(tag):
                 continue
+            known.add(tag.lower())
             items.append({"value": tag, "count": int(row["n"])})
+        # 用户 m19443: 刚建好的标签还没有专辑用它, 只认 album_tags 的话
+        # 索引里看不到(建完跳详情页能看到, 回索引就没了)。
+        try:
+            for row in self._query("SELECT name FROM tags"):
+                tag = _text(row["name"])
+                if not tag or tag.lower() in known:
+                    continue
+                if not include_useless and is_useless_tag(tag):
+                    continue
+                known.add(tag.lower())
+                items.append({"value": tag, "count": 0})
+        except Exception:        # 旧库 / 只读副本没有 tags 表
+            pass
         if limit:
             return items[: max(0, int(limit))]
         return items
@@ -1402,6 +1431,23 @@ class PublicData:
                     for other in names:
                         if other != name:
                             e["co"].add(other)
+
+            # 用户 m19443: 刚建好的艺人还没有任何专辑, 只认 albums 表的话
+            # 索引里找不到他(建完跳到详情页, 回列表却"查无此人")。
+            try:
+                for row in self._query("SELECT name FROM artists"):
+                    name = _text(row["name"])
+                    if not name:
+                        continue
+                    for part in self.ARTIST_SPLIT.split(name):
+                        item = part.strip()
+                        if not item:
+                            continue
+                        hit = [k for k in bucket if k.lower() == item.lower()]
+                        if not hit:
+                            entry(item)
+            except Exception:        # 旧库 / 只读副本没有 artists 表
+                pass
 
             out: list[dict[str, Any]] = []
             for name, e in bucket.items():
@@ -1468,6 +1514,17 @@ class PublicData:
         wanted = str(name or "").strip()
         if not wanted:
             return None
+        # 用户 m19443: 刚建好的社团**一张碟都还没有**, 以前这里只看 albums 表,
+        # 于是 303 跳过去就是「404 没有这个社团」——"已创建"和 404 同时出现。
+        # 所以先把 circles 表里的词条读出来, 有词条就算存在。
+        circle_info: dict[str, Any] = {}
+        try:
+            found = self._query(
+                "SELECT payload FROM circles WHERE name = ? COLLATE NOCASE LIMIT 1", (wanted,))
+            if found:
+                circle_info = json.loads(found[0]["payload"] or "{}")
+        except Exception:            # 旧库没有 circles 表时忽略
+            circle_info = {}
         rows = self._query(
             "SELECT key, title, payload FROM albums WHERE circle = ? COLLATE NOCASE"
             " ORDER BY release_date DESC, key", (wanted,))
@@ -1476,13 +1533,15 @@ class PublicData:
             match = next((c for c in self.circles_all()
                           if c["value"].lower() == wanted.lower()
                           or wanted.lower() in [v.lower() for v in c.get("variants", [])]), None)
-            if match is None:
+            if match is not None:
+                rows = self._query(
+                    "SELECT key, title, payload FROM albums WHERE circle IN ("
+                    + ",".join("?" for _ in match["variants"]) + ")"
+                    " ORDER BY release_date DESC, key", tuple(match["variants"]))
+                wanted = match["value"]
+            elif not circle_info:
+                # 既没有专辑、也没有词条 -> 确实不存在
                 return None
-            rows = self._query(
-                "SELECT key, title, payload FROM albums WHERE circle IN ("
-                + ",".join("?" for _ in match["variants"]) + ")"
-                " ORDER BY release_date DESC, key", tuple(match["variants"]))
-            wanted = match["value"]
         albums: list[dict[str, Any]] = []
         events: list[str] = []
         dates: list[str] = []
@@ -1548,14 +1607,6 @@ class PublicData:
             else:
                 guest.append(item)
         order = lambda p: (-p["albums"], p["name"])
-        circle_info: dict[str, Any] = {}
-        try:
-            rows2 = self._query(
-                "SELECT payload FROM circles WHERE name = ? COLLATE NOCASE LIMIT 1", (wanted,))
-            if rows2:
-                circle_info = json.loads(rows2[0]["payload"] or "{}")
-        except Exception:            # 旧库没有 circles 表时忽略
-            circle_info = {}
         return {
             "name": wanted,
             "logo": str(circle_info.get("logo_url") or ""),
@@ -1610,6 +1661,24 @@ class PublicData:
                     "variants": variants,
                     "norm": normalize(variants[0]),
                 })
+            # 用户 m19443: 刚建好的社团还没有专辑, 只认 albums 表的话索引里根本
+            # 找不到它(建完跳到详情页, 回列表却"查无此社")。把 circles 词条表里
+            # 多出来的名字也并进来, count 记 0。
+            try:
+                known = {item["norm"] for item in out}
+                for row in self._query("SELECT name FROM circles"):
+                    name = _text(row["name"])
+                    if not name or normalize(name) in known:
+                        continue
+                    known.add(normalize(name))
+                    out.append({
+                        "value": name,
+                        "count": 0,
+                        "variants": [name],
+                        "norm": normalize(name),
+                    })
+            except Exception:        # 旧库 / 只读副本没有 circles 表
+                pass
             out.sort(key=lambda c: (-c["count"], c["value"]))
             return out
 
