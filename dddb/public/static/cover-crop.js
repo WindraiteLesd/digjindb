@@ -642,7 +642,11 @@
       thumbWrap.style.cursor = "pointer";
       thumbWrap.title = "点击更换封面";
       thumbWrap.addEventListener("click", function (e) {
-        if (e.target.closest && e.target.closest("[data-cover-add]")) {
+        // 用户 m18302: 「放大」按钮和封面图在同一块里, 点在放大上会冒泡到
+        // 这里, 于是裁切弹窗把它们顶掉了 —— 放大镜点了没反应就是这么来的。
+        // 凡是带自己的动作(zoon / 加号)的元素, 这里一律让路。
+        if (e.target.closest && (e.target.closest("[data-cover-add]") ||
+                                 e.target.closest("[data-cover-zoom]"))) {
           return;
         }
         e.preventDefault();
