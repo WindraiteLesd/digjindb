@@ -610,8 +610,9 @@
     fileInput.addEventListener("change", function () {
       var f = fileInput.files && fileInput.files[0];
       if (!f) { return; }
-      if (f.size > 4 * 1024 * 1024) {
-        alert("图片不能超过 4MB");
+      // 用户 m18831: 和 public.js 的 MAX_UPLOAD_BYTES 对齐(原来 4MB)
+      if (f.size > 8 * 1024 * 1024) {
+        alert("图片不能超过 8MB");
         fileInput.value = "";
         return;
       }
