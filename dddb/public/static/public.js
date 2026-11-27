@@ -3540,6 +3540,32 @@
      右侧点击区域 = 下一张, 底部圆点 = 直接跳。
      ========================================================================== */
   /* ==========================================================================
+     站务下拉(用户 m17937): <details> 已经能开合, 这里只补两件小事 ——
+     点菜单外面自动收起、按 Esc 收起。没脚本也不影响使用.
+     ========================================================================== */
+  function setupNavMore() {
+    var more = document.querySelectorAll("[data-nav-more]");
+    if (!more.length) { return; }
+    function closeAll(except) {
+      Array.prototype.forEach.call(more, function (node) {
+        if (node !== except && node.hasAttribute("open")) { node.removeAttribute("open"); }
+      });
+    }
+    Array.prototype.forEach.call(more, function (node) {
+      node.addEventListener("toggle", function () {
+        if (node.hasAttribute("open")) { closeAll(node); }
+      });
+    });
+    document.addEventListener("click", function (e) {
+      var inside = e.target.closest ? e.target.closest("[data-nav-more]") : null;
+      closeAll(inside);
+    });
+    document.addEventListener("keydown", function (e) {
+      if (e.key === "Escape" || e.keyCode === 27) { closeAll(null); }
+    });
+  }
+
+  /* ==========================================================================
      出品信息: 同人展侧 / 独立同人侧(用户 m16568)
      两组字段都在表单里(没脚本时两组都显示, 照样能保存),
      有脚本时按选中的侧只显示对应的那组。
@@ -3897,6 +3923,8 @@
     setupDetailCover();
     // 出品信息: 同人展侧 / 独立同人侧 切换显示
     setupReleaseKind();
+    // 站务下拉(用户 m17937): 点外面/Esc 收起
+    setupNavMore();
   }
 
   if (document.readyState === "loading") {
