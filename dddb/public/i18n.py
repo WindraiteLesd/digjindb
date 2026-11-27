@@ -44,9 +44,9 @@ STRINGS: dict[str, dict[str, str]] = {
     "section.people": {"zh": "相关人士", "en": "People", "ja": "関係者"},
     "section.relations": {"zh": "人际关系", "en": "Relations", "ja": "関係"},
     "search.placeholder": {
-        "zh": "搜索标题 / 社团 / 艺人 / 曲目 / 编号",
-        "en": "Search title / circle / artist / track / catalog",
-        "ja": "タイトル / サークル / アーティスト / 曲名 / 型番で検索",
+        "zh": "搜索标题 / 社团 / 艺人 / 曲目 / 碟名 / 编号",
+        "en": "Search title / circle / artist / track / disc / catalog",
+        "ja": "タイトル / サークル / アーティスト / 曲名 / ディスク名 / 型番で検索",
     },
     "lang.label": {"zh": "语言", "en": "Language", "ja": "言語"},
 }
