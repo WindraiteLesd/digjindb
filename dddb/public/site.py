@@ -1221,8 +1221,13 @@ def parse_album_form(
         "hall": text_field(values, "hall"),
         "booth": text_field(values, "booth"),
         "original_work": text_field(values, "original_work"),
-        "producer": text_field(values, "producer"),
+        # 用户 m19622: 制作人改成多值输入(隐藏域用换行分隔), 这里合并回
+        # 一个字符串存库 —— Album.producer 仍然是单值字段。
+        "producer": "、".join(split_list(text_field(values, "producer"))),
         "platform": text_field(values, "platform"),
+        # 用户 m19622: 侧别单选以前只在 form_display_values 里回填,
+        # 保存时根本没写进 patch —— 选了也不生效。
+        "release_kind": text_field(values, "release_kind").strip().lower(),
         "tags": _tags,
         "genres": genres,
         "description": raw_field(values, "description").strip(),
@@ -1341,7 +1346,9 @@ def form_display_values(values: Mapping[str, Sequence[str]]) -> dict[str, Any]:
         "booth": text_field(values, "booth"),
         "hall": text_field(values, "hall"),
         "original_work": text_field(values, "original_work"),
-        "producer": text_field(values, "producer"),
+        # 用户 m19622: 制作人是多值绑定字段, 隐藏域用换行分隔; 回填时统成
+        # 「、」分隔 —— 模板里的 bind 组件按 /[\n、]+/ 拆, 两边都认。
+        "producer": "、".join(split_list(text_field(values, "producer"))),
         "platform": text_field(values, "platform"),
         "release_kind": text_field(values, "release_kind"),
         "discs": {
@@ -6219,6 +6226,14 @@ class PublicSite:
                     "credits": list(patch.get("credits") or []),
                     "urls": dict(patch.get("urls") or {}),
                     "tracks": list(patch.get("track_list") or []),
+                    # 用户 m19622: 这几个字段 patch 里早就有, 但新建时没抄进
+                    # payload —— 新建页填了「原作 / 制作人 / 发布平台 / 侧别」
+                    # 保存后全丢(编辑页反而正常)。
+                    "original_work": str(patch.get("original_work") or ""),
+                    "producer": str(patch.get("producer") or ""),
+                    "platform": str(patch.get("platform") or ""),
+                    "release_kind": str(patch.get("release_kind") or ""),
+                    "discs": dict(patch.get("discs") or {}),
                     "source_ids": {},
                 }
                 store.upsert_album(Album.from_dict(payload))
