@@ -359,6 +359,28 @@ class SiteContext:
         return str((self.user or {}).get("username") or "")
 
 
+def _nav_admin_menu(items, active: str) -> str:
+    """站务入口的下拉菜单(用户 m17937).
+
+    用原生 ``<details>`` 而不是"按钮 + JS 展开": 公开站的头号铁律是
+    **没有 JS 也全部功能可用**, ``<details>`` 天生就是这个语义, 点一下
+    ``<summary>`` 就开合, 一行脚本都不用写。
+    """
+    is_active = any(active == key for key, _, _ in items)
+    opts = []
+    for key, href, text in items:
+        current = ' aria-current="page"' if active == key else ""
+        cls = "nav-more-item is-active" if active == key else "nav-more-item"
+        opts.append(f'<a class="{cls}" href="{esc(href)}"{current}>{esc(text)}</a>')
+    summary_cls = "nav-link nav-more-btn is-active" if is_active else "nav-link nav-more-btn"
+    return (
+        f'<details class="nav-more" data-nav-more="1">'
+        f'<summary class="{summary_cls}">站务</summary>'
+        f'<div class="nav-more-menu">{"".join(opts)}</div>'
+        "</details>"
+    )
+
+
 def _nav(active: str, *, lang: str = "zh", is_editor: bool = False,
          is_superuser: bool = False,
          logged_in: bool = False, csrf_token: str = "",
@@ -373,10 +395,15 @@ def _nav(active: str, *, lang: str = "zh", is_editor: bool = False,
         ("edit", "/edit", i18n.translate("nav.edit", lang)),
     ]
     # 管理入口只对超级用户出现; 普通用户连链接都看不到(直接访问也会 403)。
+    # 用户 m17937: 这三个入口以前各占一格, 站务账号在手机上光导航就超出屏幕,
+    # 现在收进一个「站务」下拉里, 其余链接照旧平铺可见。
+    admin_items: list[tuple[str, str, str]] = []
     if is_superuser:
-        items.append(("review", "/review", "审核队列"))
-        items.append(("users_admin", "/users", "用户管理"))
-        items.append(("dashboard", "/dashboard", "数据看板"))
+        admin_items = [
+            ("review", "/review", "审核队列"),
+            ("users_admin", "/users", "用户管理"),
+            ("dashboard", "/dashboard", "数据看板"),
+        ]
     items.append(("about", "/about", i18n.translate("nav.about", lang)))
     if not is_editor:
         # 「工作队列」是编辑工具: 普通用户/访客连入口都不该看到
@@ -387,6 +414,8 @@ def _nav(active: str, *, lang: str = "zh", is_editor: bool = False,
         current = ' aria-current="page"' if active == key else ""
         cls = "nav-link is-active" if active == key else "nav-link"
         links.append(f'<a class="{cls}" href="{esc(href)}"{current}>{esc(text)}</a>')
+    if admin_items:
+        links.append(_nav_admin_menu(admin_items, active))
     if logged_in:
         account_cls = "nav-link is-active" if active == "account" else "nav-link"
         badge = ""
@@ -565,11 +594,11 @@ def layout(
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
 <title>{esc(title)} · {esc(ctx.site_name)}</title>
-<link rel="stylesheet" href="/static/public.css?v=83">
+<link rel="stylesheet" href="/static/public.css?v=84">
 <!-- ?v=2: 图标换过, 但静态资源被 CF/浏览器缓存 1 天, 加版本号强制刷新 -->
 <link rel="icon" href="/static/favicon.svg?v=2" type="image/svg+xml">
 <!-- 唯一的脚本: 同源外链, 只做渐进增强(CSP 只给 script-src 'self') -->
-<script src="/static/public.js?v=72" defer></script>
+<script src="/static/public.js?v=73" defer></script>
 <script src="/static/cover-crop.js?v=7" defer></script>
 <script src="/static/infobox.js?v=11" defer></script>
 </head>
@@ -4725,11 +4754,17 @@ def dashboard_page(ctx: SiteContext, *, data: Mapping[str, Any]) -> str:
     disk_total = float(disk.get("total_gb") or 0)
     disk_detail = (f"{float(disk.get('used_gb') or 0):.1f} / {disk_total:.1f} GB"
                    if disk_total else "读不到")
-    load_one = float(load.get("one") or -1)
+    # 用户 m17937: 这里以前写的是 ``float(load.get("one") or -1)`` ——
+    # 空载机器 load 正好是 0.0, 而 0.0 是假值, ``or`` 会把它换成 -1,
+    # 于是"真的很闲"被显示成"读不到"。0% 的 CPU 同理。必须显式判 None。
+    raw_load = load.get("one")
+    load_one = -1.0 if raw_load is None else float(raw_load)
     load_text = "—" if load_one < 0 else "{:.2f} / {:.2f} / {:.2f}".format(
         load_one, float(load.get("five") or 0), float(load.get("fifteen") or 0))
+    raw_cpu = server.get("cpu_percent")
+    cpu_percent = -1.0 if raw_cpu is None else float(raw_cpu)
     gauges = (
-        _gauge("CPU", float(server.get("cpu_percent") or -1), "最近 0.12 秒")
+        _gauge("CPU", cpu_percent, "采样窗口 0.5 秒")
         + _gauge("内存", float(memory.get("percent") or 0), mem_detail)
         + _gauge("硬盘", float(disk.get("percent") or 0), disk_detail)
     )
