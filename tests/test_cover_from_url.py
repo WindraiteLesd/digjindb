@@ -119,7 +119,8 @@ class TestFetchImage(unittest.TestCase):
     def test_rejects_oversize(self) -> None:
         from dddb.public import site as S
 
-        big = PNG + b"\x00" * (3 * 1024 * 1024)
+        # 用户 m18831: 上传/抓取上限从 2MB 提到 8MB, 所以要超过 S.MAX_URL_COVER_BYTES 才算超限
+        big = PNG + b"\x00" * (S.MAX_URL_COVER_BYTES + 1024)
         with mock.patch.object(S.urllib.request, "urlopen",
                               return_value=self._fake(big)):
             with self.assertRaises(S.CoverFetchError) as ctx:
