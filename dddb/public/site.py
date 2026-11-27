@@ -123,10 +123,12 @@ _PER_CIRCLES = 60
 #: 封面 / LOGO / 海报等多个文件字段。256KB 会让"传一张稍大的图"直接 413,
 #: 表现为"提交内容过大, 内容被清空不保存, 图片不上传"(用户实测)。
 #: 这里放到 8MB: 足够多张 2MB 图 + 文本, 同时仍是个有限护栏。
-MAX_BODY = 8 * 1024 * 1024
+#: 用户 m18831: 单张图上限从 2MB 提到 8MB —— 很多导出封面本身就超过 2MB,
+#: 2MB 会把它们整张拒掉。请求体上限跟着放大到 20MB(多图 + 文本)。
+MAX_BODY = 20 * 1024 * 1024
 
 #: 单张图片上限(与 _save_*_image 里的检查一致)
-MAX_IMAGE_BODY = 2 * 1024 * 1024
+MAX_IMAGE_BODY = 8 * 1024 * 1024
 #: 新建专辑时随表单带上的「其他照片」最多几张(防止一个请求塞一张相册)
 MAX_NEW_PHOTOS = 12
 
@@ -769,7 +771,7 @@ _URL_COVER_TYPES = {
 }
 
 #: 「按 URL 抓封面」的单图上限(与编辑页上传一致)
-MAX_URL_COVER_BYTES = 2 * 1024 * 1024
+MAX_URL_COVER_BYTES = MAX_IMAGE_BODY
 
 #: 抓图时用的 UA: 图床/CDN 对空 UA 常回 403
 _COVER_UA = (
@@ -910,7 +912,7 @@ def split_list(value: str) -> list[str]:
 # --------------------------------------------------------------------------
 
 #: 头像上传的请求体上限(头像本来就小; 大于这个值直接拒, 不给内存攻击留口子)
-MAX_AVATAR_BODY = 2 * 1024 * 1024
+MAX_AVATAR_BODY = MAX_IMAGE_BODY
 
 #: 从 Content-Type 里抠 boundary
 _BOUNDARY_RE = re.compile(r"boundary=([\"']?)([^\"';,\s]+)\1", re.I)
@@ -2806,8 +2808,8 @@ class PublicSite:
         if len(body) > MAX_BODY:
             return self._html(T.error_page(
                 self.context(state), status=413,
-                message="提交内容过大(上限 8MB)。"
-                        "如果是图片，请压缩到 2MB 以内。"
+                message="提交内容过大(上限 20MB)。"
+                        "如果是图片，请压缩到 8MB 以内。"
             ), status=413, cookies=cookies)
 
         origin_ok, origin_message = auth.same_origin(
@@ -3608,7 +3610,7 @@ class PublicSite:
         if ext is None:
             logger.warning("新建专辑 %s: 封面格式不支持(%s), 已跳过", key, mime)
             return False
-        if len(blob) > 2 * 1024 * 1024:
+        if len(blob) > MAX_IMAGE_BODY:
             logger.warning("新建专辑 %s: 封面超过 2MB, 已跳过", key)
             return False
         stem = _cover_stem(key)
@@ -3858,7 +3860,7 @@ class PublicSite:
         if ext is None:
             return self._html(self.forbidden(state, "只支持 PNG / JPEG / WebP。"),
                               status=400, cookies=cookies)
-        if len(blob) > 2 * 1024 * 1024:
+        if len(blob) > MAX_IMAGE_BODY:
             return self._html(self.forbidden(state, "图片不能超过 2MB。"),
                               status=400, cookies=cookies)
         # 写入标准缓存路径 ``covers/<key>.img``(封面服务认这个位置),
@@ -5769,7 +5771,7 @@ class PublicSite:
         data, content_type = upload
         ext = {"image/png": ".png", "image/jpeg": ".jpg",
                "image/webp": ".webp"}.get(str(content_type or "").lower(), "")
-        if not ext or len(data) > 2 * 1024 * 1024:
+        if not ext or len(data) > MAX_IMAGE_BODY:
             return
         from dddb.db import Store as _Store
         if self.db_path is None:
@@ -6885,7 +6887,7 @@ class PublicSite:
         if not isinstance(raw, Mapping):
             return ""
         blob = raw.get("data") or b""
-        if not blob or len(blob) > 2 * 1024 * 1024:
+        if not blob or len(blob) > MAX_IMAGE_BODY:
             return ""
         mime = str(raw.get("content_type") or "").split(";")[0].strip().lower()
         ext = {"image/png": ".png", "image/jpeg": ".jpg",
@@ -6952,7 +6954,7 @@ class PublicSite:
         if not isinstance(raw, Mapping):
             return ""
         blob = raw.get("data") or b""
-        if not blob or len(blob) > 2 * 1024 * 1024:
+        if not blob or len(blob) > MAX_IMAGE_BODY:
             return ""
         mime = str(raw.get("content_type") or "").split(";")[0].strip().lower()
         ext = {"image/png": ".png", "image/jpeg": ".jpg",
