@@ -313,6 +313,10 @@ a:hover { text-decoration: underline; }
   cursor: pointer;
 }
 .release-kind-opt input { accent-color: var(--accent); }
+/* 用户 m19622: .info-group 只是 .form-grid 里的一个 grid item, 里面的
+   .field 直接堆叠、没有 12px 间距 —— 看着就是「发布平台那个框跟上面
+   的字段间隔不一样」。这里让它自己也排成网格, 间距与共享区一致。 */
+.info-group { display: grid; gap: 12px; }
 .info-group[hidden] { display: none; }
 .field-actions button {
   flex: 1 1 auto; background: var(--panel-2); color: var(--text);
