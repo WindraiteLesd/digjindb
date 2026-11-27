@@ -550,7 +550,7 @@ HELP_TEXT = """\
 | title_romaji | 罗马字 | Blood Snow |
 | circle | 社团 / 出品方 | Winter Bouquet |
 | producer | 制作人（个人名义出品时填这里） | Winter |
-| original_work | 原作 IP（东方 / 蔚蓝档案 / 原神 …），原创留空 | 东方Project |
+| original_work | 原作 IP，原创留空 | 某作品 |
 | platform | 发布平台（独立同人侧：BOOTH / Bandcamp …） | BOOTH |
 | release_kind | 出品侧别：`event`（同人展）或 `indie`（独立同人） | event |
 | company | 发行公司（历史字段，编辑页已不再单独填） | Winter Records |
