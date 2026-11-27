@@ -192,7 +192,9 @@ class TestServerStoresCoverData(unittest.TestCase):
                     self.site._store_cover_from_data(self.key, values))
 
     def test_rejects_oversize(self):
-        big = _data_url(b"\x89PNG\r\n\x1a\n" + b"0" * (2 * 1024 * 1024 + 10))
+        # 用户 m18831: 上限提到 8MB, 所以这里要超过 MAX_IMAGE_BODY 才该被拒
+        from dddb.public.site import MAX_IMAGE_BODY
+        big = _data_url(b"\x89PNG\r\n\x1a\n" + b"0" * (MAX_IMAGE_BODY + 10))
         self.assertFalse(
             self.site._store_cover_from_data(self.key, {"cover_data": [big]}))
 
