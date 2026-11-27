@@ -178,6 +178,55 @@
   }
 
   /* ==========================================================================
+     封面大图: 通用灯箱(用户 m18302)
+     详情页点封面要能看原图, 编辑页的「放大」也要能用 —— 两边共用这一份。
+     ========================================================================== */
+  function openCoverLightbox(src, alt) {
+    if (!src) { return; }
+    var box = document.createElement("div");
+    box.className = "cover-lightbox";
+    box.setAttribute("role", "dialog");
+    box.setAttribute("aria-label", alt || "封面大图");
+    var img = document.createElement("img");
+    img.src = src;
+    img.alt = alt || "封面大图";
+    box.appendChild(img);
+    function closeBox() {
+      if (box.parentNode) { box.remove(); }
+      document.removeEventListener("keydown", onKey);
+    }
+    function onKey(e) {
+      if (e.key === "Escape") { closeBox(); }
+    }
+    box.addEventListener("click", closeBox);
+    document.addEventListener("keydown", onKey);
+    document.body.appendChild(box);
+  }
+
+  /* 详情页: 点封面看原图
+     用户 m18302「专辑详情页封面不能放大」。画廊切换按钮/圆点各有自己的
+     处理, 这里只接「点图片本身」, 而且用 preventDefault 防止误触发链接。 */
+  function setupDetailLightbox() {
+    var host = document.querySelector(".detail-cover");
+    if (!host) { return; }
+    host.addEventListener("click", function (e) {
+      var target = e.target;
+      if (!target || !target.closest) { return; }
+      // 切换按钮 / 圆点有自己的活, 别抢
+      if (target.closest("[data-cover-next]") || target.closest("[data-cover-goto]")) {
+        return;
+      }
+      var img = target.closest("img.detail-cover-img") ||
+                target.closest(".detail-cover img");
+      if (!img) { return; }
+      var src = img.getAttribute("src") || img.getAttribute("data-zoom-src");
+      if (!src) { return; }
+      e.preventDefault();
+      openCoverLightbox(src, img.getAttribute("alt") || "封面大图");
+    });
+  }
+
+  /* ==========================================================================
      封面: 点击放大 + 多图槽位(左封面 / 右加号 / 全部可删)
      槽位规则:
        第 1 格 = **当前封面**(永远存在, 也可以删 -> 变成无封面)
@@ -194,34 +243,25 @@
     if (!form || !fileInput) { return; }
 
     // ---- 灯箱放大 ----
+    // 用户 m18302: 以前这里自带一份 openLightbox, 与详情页那份重复;
+    // 现在统一走 update 后的 openCoverLightbox()。
     function openLightbox(src) {
-      if (!src) { return; }
-      var box = document.createElement("div");
-      box.className = "cover-lightbox";
-      box.setAttribute("role", "dialog");
-      box.setAttribute("aria-label", "封面大图");
-      var img = document.createElement("img");
-      img.src = src;
-      img.alt = "封面大图";
-      box.appendChild(img);
-      box.addEventListener("click", function () { box.remove(); });
-      document.addEventListener("keydown", function esc(e) {
-        if (e.key === "Escape") {
-          box.remove();
-          document.removeEventListener("keydown", esc);
-        }
-      });
-      document.body.appendChild(box);
+      openCoverLightbox(src);
     }
     var zoomBtn = document.querySelector("[data-cover-zoom]");
     if (zoomBtn) {
       zoomBtn.addEventListener("click", function (e) {
         e.preventDefault();
+        e.stopPropagation();
         if (thumbImg) { openLightbox(thumbImg.getAttribute("data-zoom-src")); }
       });
     }
     if (thumbImg) {
-      thumbImg.addEventListener("click", function () {
+      // 用户 m18302: 编辑页点封面图应该「放大」, 而不是被 cover-crop.js 的
+      // 「点图换封面」吃掉。这里先阻止冒泡, 换封面走右边的加号/上传按钮。
+      thumbImg.addEventListener("click", function (e) {
+        e.preventDefault();
+        e.stopPropagation();
         openLightbox(thumbImg.getAttribute("data-zoom-src"));
       });
     }
@@ -3921,6 +3961,8 @@
     setupPasteFill();
     // 详情页封面画廊(用户 m16568): 右侧点一下换下一张, 底部圆点直接跳
     setupDetailCover();
+    // 详情页点封面看原图(用户 m18302)
+    setupDetailLightbox();
     // 出品信息: 同人展侧 / 独立同人侧 切换显示
     setupReleaseKind();
     // 站务下拉(用户 m17937): 点外面/Esc 收起
