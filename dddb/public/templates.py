@@ -25,6 +25,16 @@ import urllib.parse
 from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping, Sequence
 
+#: 社团「活动类型」的选项(值 -> 显示文字). 与
+#: :data:`dddb.models.CIRCLE_ACTIVITY_LABELS` 一致, 但这里**不 import models**
+#: —— 模板是纯函数模块, 只依赖字符串常量就够了(用户 m19090)。
+CIRCLE_ACTIVITY_CHOICES: tuple[dict[str, str], ...] = (
+    {"value": "", "text": "（未填）"},
+    {"value": "touhou", "text": "东方"},
+    {"value": "original", "text": "原创"},
+    {"value": "both", "text": "两者都有"},
+)
+
 #: 站点名 / 副标题 —— 用户端自己的门面
 SITE_NAME = "DoujinDigDatabase"
 SITE_TAGLINE = "同人音乐专辑挖掘数据库"
@@ -2726,7 +2736,9 @@ NEW_ENTITY_SPECS: dict[str, tuple[str, list[tuple[str, str, str, str]]]] = {
     ]),
     "circle": ("新建社团", [
         ("name", "社团名", "text", ""),
-        ("activity_type", "活动类型", "text", "同人社团 / 企业 等"),
+        # 活动类型是**有限选项**(东方 / 原创 / 两者), 不是自由文本 ——
+        # 以前提示写「同人社团 / 企业 等」, 用户照着填就撞 ValueError(用户 m19090)
+        ("activity_type", "活动类型", "activity", ""),
         ("founded", "成立时间", "text", ""),
         ("last_active", "最后活动", "text", ""),
         ("urls", "相关链接", "textarea", "每行: 标签: URL"),
@@ -2838,6 +2850,21 @@ def edit_profile_page(
                 '<select name="{key}">'
                 '<option value="">(按会次名自动识别)</option>{opts}</select>'
             ).format(key=esc(key), opts=opts)
+        elif field_type == "activity":
+            # 活动类型是有限选项 -> 下拉(用户 m19090: 自由文本会让整条保存失败)
+            known = {str(item.get("value") or "") for item in CIRCLE_ACTIVITY_CHOICES}
+            choices = list(CIRCLE_ACTIVITY_CHOICES)
+            if value and value not in known:
+                # 库里存着旧版的自由文本(比如「同人社团」) —— 也要能选中,
+                # 否则一进编辑页就被悄悄改成「未填」。
+                choices.append({"value": value, "text": value})
+            opts = "".join(
+                '<option value="{v}"{sel}>{t}</option>'.format(
+                    v=esc(item.get("value") or ""),
+                    sel=" selected" if str(item.get("value") or "") == value else "",
+                    t=esc(item.get("text") or ""))
+                for item in choices)
+            input_html = f'<select name="{esc(key)}">{opts}</select>'
         elif field_type == "textarea":
             input_html = f'<textarea name="{esc(key)}" rows="4"{locked}>{esc(value)}</textarea>'
         else:
@@ -2960,6 +2987,27 @@ def new_entity_page(
         return (f'<label class="field auth-field"><span>{esc(label)}</span>'
                 f'<textarea name="{esc(name)}" rows="5">{esc(field(name))}</textarea></label>')
 
+    def choose(name: str, label: str, options: Sequence[Mapping[str, str]],
+               *, hint: str = "") -> str:
+        """下拉选择 —— 活动类型这种**有限选项**用它, 不让用户自由填写.
+
+        用户 m19090: 以前活动类型是文本框、提示写「同人社团 / 企业 等」,
+        用户照着填就撞 ``ValueError``, 整条社团都没存下来。
+        """
+        current = field(name)
+        hint_html = f'<span class="field-hint">{esc(hint)}</span>' if hint else ""
+        options_html = "".join(
+            '<option value="{v}"{sel}>{t}</option>'.format(
+                v=esc(item.get("value") or ""),
+                sel=" selected" if str(item.get("value") or "") == current else "",
+                t=esc(item.get("text") or ""))
+            for item in options
+        )
+        return (
+            f'<label class="field auth-field"><span>{esc(label)}{hint_html}</span>'
+            f'<select name="{esc(name)}">{options_html}</select></label>'
+        )
+
     if kind == "album":
         body_main = (
             '<section class="panel"><h2 class="section-title">标题</h2><div class="form-grid">'
@@ -3022,7 +3070,8 @@ def new_entity_page(
         body_main = (
             '<section class="panel"><h2 class="section-title">社团名</h2><div class="form-grid">'
             + text("name", "社团名", required=True)
-            + text("activity_type", "活动类型", hint="同人社团 / 企业")
+            + choose("activity_type", "活动类型", CIRCLE_ACTIVITY_CHOICES,
+                     hint="留空为未填")
             + "</div></section>"
             '<section class="panel"><h2 class="section-title">活动</h2><div class="form-grid">'
             + text("founded", "成立时间", input_type="date")
