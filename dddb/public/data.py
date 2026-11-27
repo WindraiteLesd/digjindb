@@ -1393,6 +1393,9 @@ class PublicData:
                 return bucket.setdefault(name, {
                     "name": name, "albums": {}, "circles": set(),
                     "occupations": set(), "co": set(),
+                    # 用户 m19886: 艺人列表/详情卡要显示头像, 头像只存在
+                    # artists 表里, 聚合阶段先留个空位, 下面读表时填上。
+                    "avatar": "",
                 })
 
             for row in rows:
@@ -1403,6 +1406,15 @@ class PublicData:
                 key = str(row["key"])
                 title = str(album.get("title") or key)
                 circle = str(album.get("circle") or "").strip()
+                # 用户 m19886: 艺人页的「参与专辑」以前只塞 {key,title,href},
+                # 卡片拿不到 cover / event / circle / track_count, 于是整片
+                # 没有封面、没有展会、没有社团。这里直接存 make_view 的完整
+                # 视图(与 circle_detail 一个路数), 卡片要什么有什么。
+                view = self.make_view(
+                    album,
+                    updated_at=row["updated_at"]
+                    if "updated_at" in row.keys() else None,
+                )
                 names: set[str] = set()
                 for artist in album.get("artists") or []:
                     text = str(artist).strip()
@@ -1425,7 +1437,7 @@ class PublicData:
                             names.add(text)
                 for name in names:
                     e = entry(name)
-                    e["albums"][key] = title
+                    e["albums"][key] = view
                     if circle:
                         e["circles"].add(circle)
                     for other in names:
@@ -1435,10 +1447,15 @@ class PublicData:
             # 用户 m19443: 刚建好的艺人还没有任何专辑, 只认 albums 表的话
             # 索引里找不到他(建完跳到详情页, 回列表却"查无此人")。
             try:
-                for row in self._query("SELECT name FROM artists"):
+                for row in self._query("SELECT name, payload FROM artists"):
                     name = _text(row["name"])
                     if not name:
                         continue
+                    try:
+                        overlay = json.loads(row["payload"] or "{}")
+                    except (ValueError, TypeError):
+                        overlay = {}
+                    avatar = _text((overlay or {}).get("avatar"))
                     for part in self.ARTIST_SPLIT.split(name):
                         item = part.strip()
                         if not item:
@@ -1446,6 +1463,12 @@ class PublicData:
                         hit = [k for k in bucket if k.lower() == item.lower()]
                         if not hit:
                             entry(item)
+                        if avatar:
+                            # 大小写/写法差异下可能命中已有桶, 一并补上头像
+                            for k in (hit or [item]):
+                                slot = bucket.get(k)
+                                if slot is not None and not slot.get("avatar"):
+                                    slot["avatar"] = avatar
             except Exception:        # 旧库 / 只读副本没有 artists 表
                 pass
 
@@ -1454,11 +1477,18 @@ class PublicData:
                 out.append({
                     "name": name,
                     "album_count": len(e["albums"]),
-                    "albums": [{"key": k, "title": t, "href": _album_href(k)}
-                           for k, t in e["albums"].items()],
+                    # 未命中的视图兜个底(比如来源行没有 payload), 卡片
+                    # 至少还能显示标题, 不至于因为缺键整张卡片炸掉。
+                    "albums": [
+                        view if isinstance(view, dict) else {
+                            "key": k, "title": t, "href": _album_href(k)}
+                        for k, view in e["albums"].items()
+                        for t in [str((view or {}).get("title") or k)]
+                    ],
                     "circles": sorted(e["circles"]),
                     "occupations": sorted(e["occupations"]),
                     "relations": sorted(e["co"]),
+                    "avatar": e.get("avatar") or "",
                 })
             out.sort(key=lambda item: (-item["album_count"], item["name"]))
             return out
@@ -1609,7 +1639,11 @@ class PublicData:
         order = lambda p: (-p["albums"], p["name"])
         return {
             "name": wanted,
-            "logo": str(circle_info.get("logo_url") or ""),
+            # 用户 m19886: 上传的徽标以前只写 logo_local, 而这里只读
+            # logo_url -> 社徽永远显示不出来。两个都认(logo_url 优先,
+            # 它是 `/logo/...` 站内地址或远程直链)。
+            "logo": str(circle_info.get("logo_url")
+                        or circle_info.get("logo_local") or ""),
             "description": str(circle_info.get("description") or ""),
             "activity_type": str(circle_info.get("activity_type") or ""),
             "founded": str(circle_info.get("founded") or ""),
