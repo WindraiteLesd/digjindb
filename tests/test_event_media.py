@@ -145,10 +145,15 @@ class TestEventDataMerge(unittest.TestCase):
         self.assertIn("e.com/p.png", row["logo"])
         self.assertEqual(len(row["links"]), 2)
 
-    def test_event_without_albums_has_no_row(self) -> None:
-        """events() 是从 albums 聚合的 —— 没有专辑的展会不出行。"""
-        names = [e["value"] for e in self.data.events()]
-        self.assertNotIn("没有专辑的展会", names)
+    def test_event_without_albums_still_listed(self) -> None:
+        """用户 m19443: 刚建好的会次一张碟都没有, 也必须出现在索引里.
+
+        以前 events() 只按 albums 聚合, 建完跳详情页能看到, 回索引却找不到.
+        """
+        rows = {e["value"]: e for e in self.data.events()}
+        self.assertIn("没有专辑的展会", rows)
+        self.assertEqual(0, rows["没有专辑的展会"]["count"])
+        self.assertTrue(rows["没有专辑的展会"]["has_logo"])
 
 
 class TestEventRender(unittest.TestCase):
