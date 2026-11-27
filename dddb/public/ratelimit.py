@@ -72,11 +72,20 @@ def client_ip_from_headers(
       ``X-Forwarded-For: 1.2.3.4`` 把自己的请求算到别人头上, 限速直接失效;
     * ``trust_proxy=True``(确实在 Caddy/Nginx 后面)时才看
       ``X-Forwarded-For``(取最左边一跳)与 ``X-Real-IP``;
+    * **TCP 对端是回环地址时自动信任**: 用户 m17937 —— 线上服务只监听
+      ``127.0.0.1:8940``, 前面必定是本机 Caddy。能从回环连进来就说明
+      "这是本机反代转发给我的", 而外网客户端根本无法造出回环对端
+      (socket 的对端地址由内核填, 伪造不了), 所以这条自动判定不比
+      显式开关宽松, 却省掉了"部署时忘了开 behind_proxy"这类坑。
     * 解析不出合法 IP 一律退化成 ``"unknown"``(共用一个桶, 宁可收紧不可放空)。
     """
     lowered = {str(k).lower(): v for k, v in (headers or {}).items()}
-    if trust_proxy:
-        for name in ("x-forwarded-for", "x-real-ip"):
+    peer = _clean_ip(remote_addr)
+    if trust_proxy or _is_loopback(peer):
+        # Cloudflare 的 ``CF-Connecting-IP`` 由边缘节点**覆盖写**, 客户端塞不了;
+        # ``X-Forwarded-For`` 却是"追加", 客户端自己发一个假值会留在链头,
+        # 取最左一跳就被人绕开限速了。所以优先认前者。
+        for name in ("cf-connecting-ip", "x-forwarded-for", "x-real-ip"):
             raw = lowered.get(name)
             if not raw:
                 continue
@@ -84,7 +93,17 @@ def client_ip_from_headers(
                 ip = _clean_ip(candidate)
                 if ip:
                     return ip
-    return _clean_ip(remote_addr) or "unknown"
+    return peer or "unknown"
+
+
+def _is_loopback(ip: str) -> bool:
+    """``"127.0.0.1"`` / ``"::1"`` 这类回环地址."""
+    if not ip:
+        return False
+    try:
+        return ipaddress.ip_address(ip).is_loopback
+    except ValueError:
+        return False
 
 
 # --------------------------------------------------------------------------
