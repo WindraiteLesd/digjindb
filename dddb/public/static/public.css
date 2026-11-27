@@ -3053,6 +3053,15 @@ tr.track-item.is-open .track-toggle { transform: rotate(90deg); }
   }
   .tracklist tr.track-extra-row > td:first-child { display: none; }
   .tracklist tr.track-extra-row > td > .track-extra { width: 100%; }
+  /* 用户 m18831: 上面那条 display:block 是**作者样式**, 会盖掉浏览器对
+     hidden 属性自带的 display:none(UA 样式永远输给作者样式) —— 结果手机上
+     每首歌的补充信息行都一直显示、还撑不开, 看着就像"曲目表没生效"。
+     这里把 hidden 重新按住(收窄到同一条选择器, 不影响桌面)。 */
+  .tracklist tr.track-extra-row[hidden] { display: none; }
+  /* 窄屏里补充信息竖着排: 一行一个字段。以前是 flex 横排 + 自动换行,
+     长值(翻译歌名之类)在极窄屏会被挤成一条竖排单字。 */
+  .track-extra { flex-direction: column; gap: 4px; }
+  .track-extra-item { display: flex; }
 }
 
 /* 更窄的手机: 序号/时长缩小, 保证曲名有空间 */
