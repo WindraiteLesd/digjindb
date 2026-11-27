@@ -2,7 +2,8 @@
 
 用户实测: "413 提交内容过大, 提交内容被清空不保存, 图片不上传"
 
-根因: ``MAX_BODY = 256KB``, 而表单允许上传 **2MB** 图片 —— 一张稍大的图
+根因: ``MAX_BODY = 256KB``, 而表单允许上传 **8MB** 图片(用户 m18831 从 2MB
+提到 8MB, 因为很多导出封面本身就超过 2MB) —— 一张稍大的图
 直接 413, 整个表单白填。
 """
 
@@ -48,12 +49,21 @@ class TestBodyLimitLargeEnough(unittest.TestCase):
         self.assertGreater(MAX_BODY, MAX_IMAGE_BODY,
                            "请求体上限必须大于单图上限, 否则图永远传不上")
         self.assertGreaterEqual(MAX_BODY, 4 * 1024 * 1024,
-                                "至少要能放一张 2MB 图 + 表单文本")
+                                "至少要能放一张 8MB 图 + 表单文本")
+
+    def test_image_limit_allows_big_export_covers(self) -> None:
+        """用户 m18831: 很多导出封面超过 2MB, 单图上限必须高于它。"""
+        from dddb.public.site import MAX_IMAGE_BODY
+
+        self.assertGreaterEqual(MAX_IMAGE_BODY, 8 * 1024 * 1024,
+                                "单图上限不能低于 8MB")
 
     def test_two_megabyte_body_fits(self) -> None:
         from dddb.public.site import MAX_BODY
 
         self.assertLess(2 * 1024 * 1024, MAX_BODY)
+        self.assertLess(8 * 1024 * 1024, MAX_BODY,
+                        "8MB 图 + 表单文本也必须放得下")
         self.assertGreater(MAX_BODY, 256 * 1024,
                            "旧的 256KB 是 413 的根因")
 
@@ -98,13 +108,25 @@ class TestLargeImageUpload(unittest.TestCase):
         self.assertTrue(saved, "1.9MB 图应该能存下")
         self.assertEqual(Path(saved).stat().st_size, len(big))
 
-    def test_over_two_megabytes_rejected_cleanly(self) -> None:
-        """超过 2MB 的图被拒, 但不该抛异常/破坏请求。"""
-        huge = PNG_HEAD + b"\x00" * (2100 * 1024)
+    def test_over_limit_rejected_cleanly(self) -> None:
+        """超过上限的图被拒, 但不该抛异常/破坏请求(用户 m18831: 上限提到 8MB)。"""
+        from dddb.public.site import MAX_IMAGE_BODY
+
+        huge = PNG_HEAD + b"\x00" * (MAX_IMAGE_BODY + 100 * 1024)
         headers, raw = _body({"logo": ("huge.png", "image/png", huge)},
                              {"name": "M3"})
         values = self.site._values_from_multipart(headers, raw)
         self.assertEqual(self.site._save_series_image("M3", "logo", values), "")
+
+    def test_two_point_one_megabytes_now_passes(self) -> None:
+        """2.1MB 的图以前被拒, 用户 m18831 之后必须能存下。"""
+        big = PNG_HEAD + b"\x00" * (2100 * 1024)
+        headers, raw = _body({"logo": ("big.png", "image/png", big)},
+                             {"name": "M3"})
+        values = self.site._values_from_multipart(headers, raw)
+        saved = self.site._save_series_image("M3", "logo", values)
+        self.assertTrue(saved, "2.1MB 图现在应该能存下")
+        self.assertEqual(Path(saved).stat().st_size, len(big))
 
     def test_multiple_images_in_one_form(self) -> None:
         """一张表单里多个图(封面 + LOGO + 海报)也要能过。"""
@@ -129,9 +151,9 @@ class TestErrorPageMessage(unittest.TestCase):
 
     def test_message_mentions_limit(self) -> None:
         src = (ROOT / "dddb/public/site.py").read_text(encoding="utf-8")
-        self.assertIn("上限 8MB", src,
+        self.assertIn("上限 20MB", src,
                       "413 提示应告诉用户上限是多少")
-        self.assertIn("2MB", src, "应提示图片要压到 2MB 以内")
+        self.assertIn("8MB", src, "应提示图片要压到 8MB 以内")
 
 
 if __name__ == "__main__":
