@@ -158,12 +158,16 @@ class TestNoDescriptionFields(unittest.TestCase):
     def test_removed(self) -> None:
         from dddb.public import templates as T
 
-        expect_gone = {"album": "description", "circle": "description",
-                       "artist": "bio", "tag": "note"}
+        # 社团的 # description 是例外: 用户 m19886 的简介就是被「表单里
+        # 没有这个字段 + 整条替换」清空的, 所以它必须回到表单里。
+        expect_gone = {"album": "description", "artist": "bio", "tag": "note"}
         for kind, field in expect_gone.items():
             with self.subTest(kind=kind):
                 names = [f[0] for f in T.NEW_ENTITY_SPECS[kind][1]]
                 self.assertNotIn(field, names, f"{kind} 还留着 {field}")
+        circle_names = [f[0] for f in T.NEW_ENTITY_SPECS["circle"][1]]
+        self.assertIn("description", circle_names,
+                      "社团字段表要有简介(用户 m19886)")
 
 
 class TestRequiredStar(unittest.TestCase):
