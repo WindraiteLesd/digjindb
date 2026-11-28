@@ -757,6 +757,14 @@ class PublicData:
             "romaji": _text(payload.get("title_romaji")),
             "circle": _text(payload.get("circle")),
             "circle_href": f"/circle/{quote_segment(_text(payload.get('circle')))}" if _text(payload.get("circle")) else "",
+            # 用户 m20229: 一张碟可能有两个以上社团, 视图里单独给一份名单,
+            # 卡片/详情页据此逐个链接, 不再把两个名字拼成一个。
+            "circles": [
+                {"name": _text(one),
+                 "href": f"/circle/{quote_segment(_text(one))}"}
+                for one in (payload.get("circles") or [])
+                if _text(one)
+            ],
             "event": _text(payload.get("event")),
             "event_href": f"/event/{quote_segment(_text(payload.get('event')))}" if _text(payload.get("event")) else "",
             "event_kind": _text(payload.get("event_kind")),
@@ -1420,8 +1428,12 @@ class PublicData:
                     text = str(artist).strip()
                     if text:
                         names.add(text)
-                for group in album.get("credits") or []:
-                    label = str(group.get("label") or "").strip()
+                # 用户 m20229: payload 里的 credits 是**扁平**的
+                # [{role, name}], 没有 label —— 直接读 group["label"] 永远
+                # 是空, 「职业」就一条都汇总不出来。先按职责分组。
+                for group in group_credits(album.get("credits") or []):
+                    label = str(group.get("label")
+                                or group.get("role") or "").strip()
                     for name in group.get("names") or []:
                         for part in self.ARTIST_SPLIT.split(str(name or "")):
                             item = part.strip()
@@ -1528,6 +1540,21 @@ class PublicData:
         detail["name_en"] = str(overlay.get("name_en") or "")
         detail["name_ja"] = str(overlay.get("name_ja") or "")
         detail["aliases"] = [str(a) for a in (overlay.get("aliases") or []) if str(a).strip()]
+        # 用户 m20229: 别名要能「关联到对应艺人」—— 同名的别名在艺人页
+        # 直接链到那位艺人的主页; 找不到就照旧显示纯文本。
+        detail["alias_links"] = {}
+        try:
+            known = {str(item.get("name") or "").lower(): str(item.get("name") or "")
+                     for item in self.artists_all() if item.get("name")}
+            me = str(detail.get("name") or "").lower()
+            from urllib.parse import quote as _quote
+            for alias in detail["aliases"]:
+                owner = known.get(alias.lower())
+                if owner and owner.lower() != me:
+                    detail["alias_links"][alias] = (
+                        "/artist/" + _quote(owner, safe=""))
+        except Exception:            # noqa: BLE001 —— 读不到就当没有链接
+            detail["alias_links"] = {}
         detail["gender"] = str(overlay.get("gender") or "")
         detail["birthday"] = str(overlay.get("birthday") or "")
         detail["occupations_text"] = str(overlay.get("occupations_text") or "")
@@ -1555,9 +1582,13 @@ class PublicData:
                 circle_info = json.loads(found[0]["payload"] or "{}")
         except Exception:            # 旧库没有 circles 表时忽略
             circle_info = {}
+        # 用户 m20229: 除了主社团, 还要把「第二个社团」也算进来 ——
+        # payload.circles 里出现过的都算这个社团的碟。
         rows = self._query(
             "SELECT key, title, payload FROM albums WHERE circle = ? COLLATE NOCASE"
-            " ORDER BY release_date DESC, key", (wanted,))
+            "    OR EXISTS (SELECT 1 FROM json_each(albums.payload, '$.circles') je"
+            "               WHERE je.value = ? COLLATE NOCASE)"
+            " ORDER BY release_date DESC, key", (wanted, wanted))
         if not rows:
             # 名字大小写/写法差异: 退回到聚合列表里找
             match = next((c for c in self.circles_all()
