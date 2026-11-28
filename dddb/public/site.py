@@ -1204,12 +1204,24 @@ def parse_album_form(
 
     # 再贩标记归入标签: "C108(resale)" -> event="C108" + tags += 再贩
     _ev, _tags = normalize_resale_event(text_field(values, "event"), index)
+    # 用户 m20229: 「社团 / 出品方」是绑定控件(回车分隔多个), 而 ``Album.circle``
+    # 是单个字符串 —— 以前两个社团会被 ``_clean_str`` 拼成一个名字
+    # (「甲 乙」), 索引里就多出一条叫「甲 乙」的假社团。这里拆成名单:
+    # ``circle`` 仍是第一个(老代码/老数据都按它工作), 完整名单进 ``circles``。
+    _circle_parts = [part.strip()
+                     for part in re.split(r"[\n、]+", text_field(values, "circle"))
+                     if part.strip()]
+    _dedup_circles: list[str] = []
+    for _one in _circle_parts:
+        if _one not in _dedup_circles:
+            _dedup_circles.append(_one)
 
     patch: dict[str, Any] = {
         "title_original": title_original or title,
         "title": title or title_original,
         "title_romaji": text_field(values, "title_romaji"),
-        "circle": text_field(values, "circle"),
+        "circle": _dedup_circles[0] if _dedup_circles else "",
+        "circles": _dedup_circles,
         "artists": split_list(text_field(values, "artists")),
         "release_date": release_date,
         "event": _ev,  # (resale) 已归入标签, 见下方 _ev/_tags 计算
@@ -1338,6 +1350,9 @@ def form_display_values(values: Mapping[str, Sequence[str]]) -> dict[str, Any]:
         "title_original": text_field(values, "title_original"),
         "title_romaji": text_field(values, "title_romaji"),
         "circle": text_field(values, "circle"),
+        "circles": [part.strip()
+                    for part in re.split(r"[\n、]+", text_field(values, "circle"))
+                    if part.strip()],
         "artists": text_field(values, "artists"),
         "release_date": text_field(values, "release_date"),
         "event": text_field(values, "event"),
@@ -6216,6 +6231,8 @@ class PublicSite:
                     "title_original": title,
                     "title_romaji": str(patch.get("title_romaji") or ""),
                     "circle": str(patch.get("circle") or ""),
+                    "circles": [str(one) for one in
+                                (patch.get("circles") or []) if str(one).strip()],
                     "artists": list(patch.get("artists") or []),
                     "release_date": date,
                     "event": str(patch.get("event") or ""),
@@ -6274,7 +6291,8 @@ class PublicSite:
                     return self._html(self.forbidden(state, "社团名不能为空。"),
                                       status=400, cookies=cookies)
                 staff = []
-                for line in field("staff").splitlines():
+                _staff_pairs = self._pair_rows(values, "staff_role", "staff_name")
+                for line in ([] if _staff_pairs else field("staff").splitlines()):
                     line = line.strip()
                     if not line:
                         continue
@@ -6288,7 +6306,10 @@ class PublicSite:
                     "founded": field("founded"),
                     "last_active": field("last_active"),
                     "description": field("description"),
-                    "urls": self._parse_urls(field("urls")),
+                    "urls": (
+                        {label or url: url
+                         for label, url in self._pair_rows(values, "url_key", "url_value")}
+                        or self._parse_urls(field("urls"))),
                     "staff": staff,
                 }))
                 created_name = name
@@ -6309,7 +6330,10 @@ class PublicSite:
                     "bio": field("bio"), "avatar": field("avatar"),
                     "links": [{"href": url, "text": label}
                               for label, url in
-                              self._parse_urls(field("links")).items()],
+                              ([{"href": url, "text": label or url}
+                                for label, url in self._pair_rows(
+                                    values, "url_key", "url_value")]
+                               or self._parse_urls(field("links")).items())],
                 })
                 created_name = name
                 target = "/artist/" + T.quote_segment(name)
@@ -6544,11 +6568,27 @@ class PublicSite:
                     pass
                 finally:
                     store.close()
+        # 用户 m20229: 职业按参与专辑里的职责自动汇总; 别名给已有艺人做候选,
+        # 同名别名在艺人页会直接链过去。
+        _occupations: list[str] = []
+        _alias_choices: list[str] = []
+        if kind == "artist":
+            try:
+                _detail = self.data.artist_detail(name) or {}
+                _occupations = [str(one) for one in
+                                (_detail.get("occupations") or [])
+                                if str(one).strip()]
+                _alias_choices = [str(item.get("name") or "")
+                                  for item in self.data.artists_all()
+                                  if str(item.get("name") or "")]
+            except Exception:            # noqa: BLE001 —— 读不到就不显示候选
+                _occupations, _alias_choices = [], []
         return self._html(T.edit_profile_page(
             self.context(state, active="edit"), kind,
             values["name"] if values else name,
             values=values, notice=notice, back_url=back,
-            series_options=series_options, has_logo=has_logo),
+            series_options=series_options, has_logo=has_logo,
+            occupations=_occupations, alias_choices=_alias_choices),
             cookies=cookies)
 
     def _do_entity_update(self, kind: str, name: str, values: Mapping[str, Any],
@@ -6568,7 +6608,18 @@ class PublicSite:
             _new_logo = ""
             if kind == "event" and isinstance(values.get("logo"), Mapping):
                 _new_logo = self._save_event_logo_file(name, values)
+            _new_avatar = self._save_entity_image_file("artist", name, "avatar", values)
+            _new_circle_logo = self._save_entity_image_file(
+                "circle", name, "logo", values)
+            _url_pairs = self._pair_rows(values, "url_key", "url_value")
             if kind == "artist":
+                _prev_artist = store.get_artist(name) or {}
+                _links = ([{"href": url, "text": label or url}
+                           for label, url in _url_pairs]
+                          if _url_pairs else
+                          [{"href": url, "text": label}
+                           for label, url in
+                           self._parse_urls(text_field(values, "links")).items()])
                 ok, message = store.upsert_artist(name, {
                     "name_en": text_field(values, "name_en").strip(),
                     "name_ja": text_field(values, "name_ja").strip(),
@@ -6580,10 +6631,11 @@ class PublicSite:
                     "occupations_text": text_field(values, "occupations_text").strip(),
                     "nationality": text_field(values, "nationality").strip().upper()[:2],
                     "bio": text_field(values, "bio").strip(),
-                    "avatar": text_field(values, "avatar").strip(),
-                    "links": [{"href": url, "text": label}
-                              for label, url in
-                              self._parse_urls(text_field(values, "links")).items()],
+                    # 用户 m20229: 头像改成上传 —— 没传新图就保留原来的
+                    "avatar": _new_avatar or str(
+                        _prev_artist.get("avatar")
+                        or text_field(values, "avatar")).strip(),
+                    "links": _links,
                 })
                 if not ok:
                     return self._html(self.forbidden(state, message), status=400,
@@ -6600,9 +6652,20 @@ class PublicSite:
                 }
                 if "description" in values:
                     patch["description"] = text_field(values, "description").strip()
-                if "urls" in values:
+                # 用户 m20229: 徽标改为上传; 没传新图就保留库里原值。
+                if _new_circle_logo:
+                    patch["logo_url"] = _new_circle_logo
+                    patch["logo_local"] = ""
+                if _url_pairs:
+                    patch["urls"] = {label or url: url
+                                     for label, url in _url_pairs}
+                elif "urls" in values:
                     patch["urls"] = self._parse_urls(text_field(values, "urls"))
-                if "staff" in values:
+                _staff_pairs = self._pair_rows(values, "staff_role", "staff_name")
+                if _staff_pairs:
+                    patch["staff"] = [{"role": role, "name": who}
+                                      for role, who in _staff_pairs]
+                elif "staff" in values:
                     _staff: list[dict[str, str]] = []
                     for _line in text_field(values, "staff").splitlines():
                         _line = _line.strip()
@@ -6955,6 +7018,66 @@ class PublicSite:
             state.session.flash = "展会系列已保存"
         return Response.redirect(
             "/event-series/" + T.quote_segment(target_name), status=303)
+
+    @staticmethod
+    def _pair_rows(values: Mapping[str, Any], key_field: str,
+                   value_field: str) -> list[tuple[str, str]]:
+        """从「行编辑」里取 (左, 右) 列表.
+
+        用户 m20229: 艺人的相关链接、社团的成员/链接都改成与专辑编辑页
+        同一套行编辑(同名输入框重复提交, ``values`` 里是列表)。
+        老表单/零脚本时仍走 textarea 那条路, 所以两边都要能读。
+        """
+        lefts = values.get(key_field)
+        rights = values.get(value_field)
+        if lefts is None and rights is None:
+            return []
+        if not isinstance(lefts, (list, tuple)):
+            lefts = [lefts] if lefts is not None else []
+        if not isinstance(rights, (list, tuple)):
+            rights = [rights] if rights is not None else []
+        out: list[tuple[str, str]] = []
+        for index in range(max(len(lefts), len(rights))):
+            left = str(lefts[index] if index < len(lefts) else "").strip()
+            right = str(rights[index] if index < len(rights) else "").strip()
+            if right:
+                out.append((left, right))
+        return out
+
+    def _save_entity_image_file(self, kind: str, name: str,
+                                field: str,
+                                values: Mapping[str, Any]) -> str:
+        """保存艺人头像 / 社团徽标(``field`` = avatar / logo).
+
+        返回站点内地址 ``/logo/<文件名>`` —— 表单只认 URL, 以前让用户
+        手填地址(用户 m20229 要求改成上传)。失败返回空串, 由调用方
+        保留库里原值。
+        """
+        if kind not in ("artist", "circle"):
+            return ""
+        raw = values.get(field)
+        if not isinstance(raw, Mapping):
+            return ""
+        blob = raw.get("data") or b""
+        if not blob or len(blob) > MAX_IMAGE_BODY:
+            return ""
+        mime = str(raw.get("content_type") or "").split(";")[0].strip().lower()
+        ext = {"image/png": ".png", "image/jpeg": ".jpg",
+               "image/webp": ".webp"}.get(mime)
+        if ext is None:
+            return ""
+        covers = getattr(self.data, "covers_dir", None)
+        base = Path(covers) if covers else (
+            Path(self.db_path).parent / "covers" if self.db_path else Path("."))
+        folder = base / "logos"
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+            safe = T.quote_segment(name).replace("%", "_")
+            target = folder / "{}-{}{}".format(kind, safe, ext)
+            target.write_bytes(blob)
+        except OSError:                      # pragma: no cover
+            return ""
+        return "/logo/" + T.quote_segment(target.name)
 
     def _save_event_logo_file(self, name: str,
                               values: Mapping[str, Any]) -> str:
