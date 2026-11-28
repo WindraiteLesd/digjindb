@@ -2661,6 +2661,11 @@
     url: {
       fields: [["url_key", "链接名", "填网址自动识别"],
                ["url_value", "网址", "https://..."]]
+    },
+    /* 用户 m20229: 社团成员也改成行编辑(角色 + 名字), 与词条行同一套交互 */
+    staff: {
+      fields: [["staff_role", "角色", "owner / 主催 / 作曲"],
+               ["staff_name", "名字", "成员名"]]
     }
   };
 
@@ -2910,7 +2915,9 @@
       // 用户 m17600
       ["shop.geekjack.net", "Geek Jack"],
       ["geekjack.net", "Geek Jack"],
-      ["tanocstore.net", "TANO*C Store"]
+      ["tanocstore.net", "TANO*C Store"],
+    /* 用户 m20229: linkco.re 是「多平台试听聚合」页 */
+    ["linkco.re", "Stream Links"]
     ];
     function guess(value) {
       var text = String(value || "").trim();
