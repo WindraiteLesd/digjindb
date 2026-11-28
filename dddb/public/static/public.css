@@ -2241,6 +2241,32 @@ tr.track-item.is-open .track-toggle { transform: rotate(90deg); }
 /* 曲目表: 整行, 在卡片网格之外 */
 .edit-tracks-card     { margin-top: 14px; }
 
+/* 用户 m20229: 资料编辑页(艺人 / 社团)也走卡片分类 ——
+   与专辑编辑页同一套 .edit-card, 只是版面简单些。 */
+.edit-cards.is-profile { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.edit-card-profile-main { grid-column: 1 / -1; }
+.edit-card-image        { grid-column: 1; }
+.edit-card-occupations  { grid-column: 2; }
+.edit-card-alias,
+.edit-card-bio,
+.edit-card-staff,
+.edit-card-links        { grid-column: 1 / -1; }
+@media (max-width: 820px) {
+  .edit-cards.is-profile { grid-template-columns: minmax(0, 1fr); }
+  .edit-card-image,
+  .edit-card-occupations  { grid-column: 1 / -1; }
+}
+.entity-image-row { display: flex; align-items: center; gap: 14px; margin-bottom: 10px; }
+.entity-edit-thumb {
+  width: 96px; height: 96px; flex: none; object-fit: cover;
+  border-radius: 12px; border: 1px solid var(--line, #2a2f3a);
+  background: var(--panel-2, rgba(255, 255, 255, .03));
+}
+.entity-edit-thumb.is-empty {
+  display: flex; align-items: center; justify-content: center;
+  font-size: 12px; color: var(--text-dim, #8b93a3); text-align: center;
+}
+.entity-occupations .chip-row { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 10px; }
 .edit-card-head {
   display: flex;
   align-items: center;
