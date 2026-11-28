@@ -604,11 +604,11 @@ def layout(
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
 <title>{esc(title)} · {esc(ctx.site_name)}</title>
-<link rel="stylesheet" href="/static/public.css?v=88">
+<link rel="stylesheet" href="/static/public.css?v=89">
 <!-- ?v=2: 图标换过, 但静态资源被 CF/浏览器缓存 1 天, 加版本号强制刷新 -->
 <link rel="icon" href="/static/favicon.svg?v=2" type="image/svg+xml">
 <!-- 唯一的脚本: 同源外链, 只做渐进增强(CSP 只给 script-src 'self') -->
-<script src="/static/public.js?v=76" defer></script>
+<script src="/static/public.js?v=77" defer></script>
 <script src="/static/cover-crop.js?v=9" defer></script>
 <script src="/static/infobox.js?v=12" defer></script>
 </head>
@@ -1475,12 +1475,22 @@ def album_detail_page(
             '<button type="submit" class="btn-ghost btn-xs">'
             f'{"已关注 ✓" if following_circle else "关注"}</button></form>'
         )
+    # 用户 m20229: 合辑可能有两个以上社团 —— 逐个链接, 中间用「 / 」分隔。
+    _circle_links = [
+        item for item in (album.get("circles") or [])
+        if isinstance(item, Mapping) and str(item.get("name") or "").strip()
+    ]
+    if not _circle_links and _circle_name:
+        _circle_links = [{"name": _circle_name,
+                          "href": album.get("circle_href") or ""}]
     circle_line = (
         '<p class="detail-circle"><span class="circle-label">社团</span>'
-        '<a class="circle-link" href="{}">{}</a>{}</p>'.format(
-            esc(album.get("circle_href") or "#"), esc(_circle_name),
-            _circle_follow)
-        if _circle_name else ""
+        + " / ".join(
+            '<a class="circle-link" href="{}">{}</a>'.format(
+                esc(item.get("href") or "#"), esc(str(item.get("name") or "")))
+            for item in _circle_links)
+        + _circle_follow + "</p>"
+        if _circle_links else ""
     )
 
     # 曲目按碟分组(详情页也要看得出分碟)
@@ -2809,6 +2819,47 @@ def entity_new_buttons(ctx: SiteContext, kinds: Sequence[str] = ()) -> str:
 
 
 
+def _entity_card(title: str, inner: str, extra_class: str = "") -> str:
+    """资料编辑页的卡片(与专辑编辑页的 ``edit-card`` 同一套样式)."""
+    cls = "edit-card edit-card-profile" + ((" " + extra_class) if extra_class else "")
+    head = '<div class="edit-card-head"><h3>{}</h3></div>'.format(esc(title))
+    return '<section class="{}">{}<div class="edit-card-body">{}</div></section>'.format(
+        cls, head, inner)
+
+
+def _pair_url_rows(rows: Sequence[Mapping[str, Any]]) -> str:
+    """外链行(链接名 + 网址)。与专辑编辑页**同一套**标记, JS 也复用。"""
+    return "".join(
+        '<div class="pair-row" data-pair-row="url">'
+        '<label class="field auth-field"><span>链接名</span>'
+        '<input type="text" name="url_key" value="{}"'
+        ' list="dl-url_key" autocomplete="off"'
+        ' placeholder="填网址自动识别"></label>'
+        '<label class="field auth-field"><span>网址</span>'
+        '<input type="text" name="url_value" value="{}"'
+        ' placeholder="https://..."></label>'
+        '<button type="button" class="pair-del" data-pair-del="url"'
+        ' title="删除这一条" aria-label="删除这一条">✕</button></div>'.format(
+            esc(str(row.get("text") or "")), esc(str(row.get("href") or "")))
+        for row in rows)
+
+
+def _pair_staff_rows(rows: Sequence[Mapping[str, Any]]) -> str:
+    """成员行(角色 + 名字)。用户 m20229: 与专辑的词条行同一套交互。"""
+    return "".join(
+        '<div class="pair-row" data-pair-row="staff">'
+        '<label class="field auth-field"><span>角色</span>'
+        '<input type="text" name="staff_role" value="{}"'
+        ' placeholder="owner / 主催 / 作曲"></label>'
+        '<label class="field auth-field"><span>名字</span>'
+        '<input type="text" name="staff_name" value="{}"'
+        ' placeholder="成员名"></label>'
+        '<button type="button" class="pair-del" data-pair-del="staff"'
+        ' title="删除这一条" aria-label="删除这一条">✕</button></div>'.format(
+            esc(str(row.get("role") or "")), esc(str(row.get("name") or "")))
+        for row in rows)
+
+
 def edit_profile_page(
     ctx: SiteContext,
     kind: str,
@@ -2819,88 +2870,317 @@ def edit_profile_page(
     back_url: str = "",
     series_options: Sequence[Mapping[str, Any]] = (),
     has_logo: bool = False,
+    occupations: Sequence[str] = (),
+    alias_choices: Sequence[str] = (),
 ) -> str:
-    """云端资料录入: 复用 NEW_ENTITY_SPECS 的字段表, 预填当前值.
+    """云端资料录入: 卡片分组, 图片走上传, 链接/成员走行编辑.
 
-    ``file`` 类型渲染成**上传控件**(带已有图预览); ``series`` 渲染成下拉。
-    表单是 ``multipart/form-data`` —— 否则文件不会随 POST 发出。
+    用户 m20229 要求:
+      * 头像/徽标不再是填 URL, 改成**上传图片**(保留已有图预览);
+      * 职业按这个艺人参与专辑里的**职责自动汇总**, 也允许手改;
+      * 别名能与已有艺人对应上(同名别名会链到那位艺人), 输入框给候选;
+      * 相关链接与专辑编辑页**同一套行编辑**(填网址自动识别链接名);
+      * 社团成员同样改成行编辑;
+      * 两个编辑页都按卡片分类排版。
     """
     spec_title, fields = NEW_ENTITY_SPECS[kind]
     title = i18n.translate(f"new.{kind}", ctx.lang, default=spec_title)
     values = values or {}
-    rows = []
-    for key, label, field_type, help_text in fields:
+    action = "/{}/{}/edit".format(kind, quote_segment(name))
+    back = back_url or action[:-5]
+
+    def text_input(key: str, label: str, hint: str = "",
+                   input_type: str = "text") -> str:
         value = str(values.get(key) or "")
-        hint = f'<span class="field-hint">{esc(help_text)}</span>' if help_text else ""
+        hint_html = f'<span class="field-hint">{esc(hint)}</span>' if hint else ""
         locked = " readonly" if key == "name" else ""
-        if field_type == "file":
-            # 已有图就预览, 让用户知道现在用的是哪张
-            preview = ""
-            if has_logo and kind == "event":
-                preview = ('<img class="series-edit-thumb" '
-                           'src="/event-logo/{}" alt="{}">'
-                           .format(esc(quote_segment(name)), esc(label)))
-            input_html = (
-                '<div class="series-edit-image-row">'
-                '{preview}'
+        star = ('<span class="req" aria-hidden="true">*</span>'
+                if key == "name" else "")
+        return (
+            f'<label class="field auth-field"><span>{star}{esc(label)}'
+            f"{hint_html}</span>"
+            f'<input type="{input_type}" name="{esc(key)}" value="{esc(value)}"{locked}>'
+            "</label>"
+        )
+
+    def textarea(key: str, label: str, hint: str = "", rows_no: int = 4) -> str:
+        value = str(values.get(key) or "")
+        hint_html = f'<span class="field-hint">{esc(hint)}</span>' if hint else ""
+        return (
+            f'<label class="field auth-field"><span>{esc(label)}{hint_html}</span>'
+            f'<textarea name="{esc(key)}" rows="{rows_no}">{esc(value)}</textarea>'
+            "</label>"
+        )
+
+    def activity_input() -> str:
+        value = str(values.get("activity_type") or "")
+        opts = "".join(
+            '<option value="{}"></option>'.format(esc(str(item.get("value") or "")))
+            for item in CIRCLE_ACTIVITY_CHOICES if item.get("value"))
+        return (
+            '<label class="field auth-field"><span>活动类型'
+            '<span class="field-hint">可自由填写</span></span>'
+            f'<input type="text" name="activity_type" value="{esc(value)}"'
+            ' list="dl-activity-type" autocomplete="off">'
+            f'<datalist id="dl-activity-type">{opts}</datalist></label>'
+        )
+
+    def image_card(upload_name: str, label: str) -> str:
+        image = safe_url(str(values.get("avatar") if kind == "artist"
+                             else values.get("logo_url")) or "")
+        preview = (
+            '<img class="entity-edit-thumb" src="{}" alt="{}" loading="lazy">'
+            .format(esc(image), esc(label)) if image
+            else '<div class="entity-edit-thumb is-empty">暂无图片</div>'
+        )
+        return _entity_card(
+            label,
+            '<div class="entity-image-row">{}</div>'
+            '<label class="field auth-field"><span>上传新图</span>'
+            '<input type="file" name="{}" accept="image/png,image/jpeg,image/webp">'
+            '<span class="field-hint">PNG / JPEG / WebP，≤8MB；留空则不变</span>'
+            "</label>".format(preview, esc(upload_name)),
+            "edit-card-image",
+        )
+
+    # 链接行: 从 textarea 形式的 urls/links 拆出来(老数据照常回填)
+    raw_links = str(values.get("links") or values.get("urls") or "")
+    link_rows: list[dict[str, str]] = []
+    for line in raw_links.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        head, sep, tail = line.partition(":")
+        if sep and tail.strip().startswith("//"):
+            link_rows.append({"text": head.strip(), "href": (sep + tail).strip()})
+        elif sep:
+            left, _, right = line.partition(":")
+            link_rows.append({"text": left.strip(), "href": right.strip()})
+    if not link_rows:
+        link_rows = [{"text": "", "href": ""}]
+    link_inner = (
+        '<datalist id="dl-url_key">'
+        + "".join('<option value="{}"></option>'.format(esc(_one))
+                  for _one in link_names.name_choices())
+        + "</datalist>"
+        + '<div class="rows">' + _pair_url_rows(link_rows) + "</div>"
+        + '<div class="pair-add"><button type="button" class="btn-ghost btn-xs"'
+        ' data-pair-add="url">＋ 添加外链</button></div>'
+    )
+
+    cards: list[str] = []
+    if kind == "artist":
+        cards.append(_entity_card(
+            "基本资料",
+            '<div class="form-grid">'
+            + text_input("name", "艺名")
+            + text_input("name_en", "艺名(英)")
+            + text_input("name_ja", "艺名(日)")
+            + text_input("real_name", "本名")
+            + text_input("real_name_en", "本名(译)")
+            + text_input("gender", "性别")
+            + text_input("birthday", "生日", "YYYY-MM-DD", "date")
+            + text_input("nationality", "国籍", "两位国家码")
+            + "</div>",
+            "edit-card-profile-main",
+        ))
+        cards.append(image_card("avatar", "头像"))
+        derived = [str(item) for item in occupations if str(item).strip()]
+        chips = "".join(
+            '<span class="person-chip is-static">{}</span>'.format(esc(item))
+            for item in derived)
+        cards.append(_entity_card(
+            "职业",
+            '<div class="entity-occupations">'
+            '<p class="field-hint">按这个艺人参与专辑里的职责自动汇总'
+            + ("：" if derived else "（暂无专辑职责，可手工填写）")
+            + "</p>"
+            + ('<div class="chip-row">' + chips + "</div>" if chips else "")
+            + text_input("occupations_text", "手工补充", "、分隔")
+            + "</div>",
+            "edit-card-occupations",
+        ))
+        alias_opts = "".join(
+            '<option value="{}"></option>'.format(esc(one))
+            for one in alias_choices if str(one).strip())
+        cards.append(_entity_card(
+            "别名",
+            '<label class="field auth-field"><span>别名'
+            '<span class="field-hint">、分隔；与已有艺人同名时会自动链到那位艺人</span>'
+            "</span>"
+            '<input type="text" name="aliases" value="{}"'
+            ' list="dl-artist-names" autocomplete="off">'
+            '<datalist id="dl-artist-names">{}</datalist></label>'.format(
+                esc(str(values.get("aliases") or "")), alias_opts),
+            "edit-card-alias",
+        ))
+        cards.append(_entity_card("简介", textarea("bio", "简介"), "edit-card-bio"))
+    elif kind == "circle":
+        cards.append(_entity_card(
+            "基本资料",
+            '<div class="form-grid">'
+            + text_input("name", "社团名")
+            + activity_input()
+            + text_input("founded", "成立时间")
+            + text_input("last_active", "最后活动")
+            + "</div>",
+            "edit-card-profile-main",
+        ))
+        cards.append(image_card("logo", "徽标"))
+        cards.append(_entity_card(
+            "简介", textarea("description", "简介"), "edit-card-bio"))
+        staff_rows: list[dict[str, str]] = []
+        for line in str(values.get("staff") or "").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            head, _, tail = (line.partition(":") if ":" in line
+                             else line.partition("："))
+            if tail.strip():
+                staff_rows.append({"role": head.strip(), "name": tail.strip()})
+        if not staff_rows:
+            staff_rows = [{"role": "", "name": ""}]
+        cards.append(_entity_card(
+            "成员",
+            '<div class="rows">' + _pair_staff_rows(staff_rows) + "</div>"
+            '<div class="pair-add"><button type="button" class="btn-ghost btn-xs"'
+            ' data-pair-add="staff">＋ 添加成员</button></div>',
+            "edit-card-staff",
+        ))
+    else:
+        # 会次 / 标签: 字段少, 一张卡里平铺就够了(不再细分成多张卡)。
+        def image_with_preview(key: str, label: str) -> str:
+            """会次图: 有图显示预览, 下面是上传框(沿用 series-edit-thumb 样式)."""
+            local = str(values.get("logo_local") or "")
+            src = ("/event-logo/" + quote_segment(name) if local else
+                   safe_url(str(values.get(key + "_url") or "")))
+            preview = (
+                '<img class="series-edit-thumb" src="{}" alt="{}">'.format(
+                    esc(src), esc(label)) if src
+                else '<span class="series-edit-thumb series-edit-thumb-text">'
+                     "无图</span>")
+            return (
+                '<div class="field auth-field series-edit-image">'
+                f"<span>{esc(label)}</span>"
+                '<div class="series-edit-image-row">' + preview +
                 '<div class="series-edit-image-form">'
-                '<input type="file" name="{key}"'
+                f'<input type="file" name="{esc(key)}"'
                 ' accept="image/png,image/jpeg,image/webp">'
-                '<p class="field-hint">上传后替换当前图；留空则不变</p>'
-                '</div></div>'
-            ).format(preview=preview, key=esc(key))
-        elif key == "series" and series_options:
-            opts = "".join(
+                '<p class="field-hint">PNG / JPEG / WebP，≤8MB</p>'
+                "</div></div></div>"
+            )
+
+        def series_select() -> str:
+            current = str(values.get("series") or "")
+            opts = '<option value="">（未归类）</option>' + "".join(
                 '<option value="{v}"{sel}>{v}{a}</option>'.format(
-                    v=esc(item.get("name") or ""),
-                    sel=" selected" if value == str(item.get("name") or "")
-                    else "",
+                    v=esc(str(item.get("name") or "")),
+                    sel=" selected" if current == str(item.get("name") or "") else "",
                     a=(" · " + str(item.get("abbr") or ""))
                     if item.get("abbr") else "")
                 for item in series_options)
-            input_html = (
-                '<select name="{key}">'
-                '<option value="">(按会次名自动识别)</option>{opts}</select>'
-            ).format(key=esc(key), opts=opts)
-        elif field_type == "activity":
-            # 用户 m19886: 活动类型要能自己填 —— 所以是带候选的文本框, 不是下拉。
-            opts = "".join(
-                '<option value="{v}"></option>'.format(v=esc(item.get("value") or ""))
-                for item in CIRCLE_ACTIVITY_CHOICES if item.get("value"))
-            input_html = (
-                f'<input type="text" name="{esc(key)}" value="{esc(value)}"'
-                ' list="dl-activity-type" autocomplete="off">'
-                f'<datalist id="dl-activity-type">{opts}</datalist>'
-            )
-        elif field_type == "textarea":
-            input_html = f'<textarea name="{esc(key)}" rows="4"{locked}>{esc(value)}</textarea>'
-        else:
-            itype = esc(field_type) if field_type == "date" else "text"
-            input_html = (f'<input type="{itype}" name="{esc(key)}"'
-                          f' value="{esc(value)}"{locked}>')
-        # 名字是必填 -> 红色 *(不用"必填"两个汉字)
-        star = ('<span class="req" aria-hidden="true">*</span>'
-                if key == "name" else "")
-        rows.append(
-            f'<label class="field auth-field"><span>{star}{esc(label)}'
-            f"{hint}</span>"
-            f"{input_html}</label>"
-        )
-    action = "/{}/{}/edit".format(kind, quote_segment(name))
+            return ('<label class="field auth-field"><span>所属系列</span>'
+                    f'<select name="series">{opts}</select></label>')
+
+        rows_html = []
+        for key, label, field_type, help_text in fields:
+            if key == "series":
+                rows_html.append(series_select() if series_options
+                                 else text_input(key, label, help_text))
+                continue
+            if key == "name":
+                # 名字是主键, 不能改 —— 但表单里要有一个只读框,
+                # 否则「字段齐全」的约定就破了(测试也按这个查)。
+                rows_html.append(
+                    '<label class="field auth-field"><span><span class="req"'
+                    ' aria-hidden="true">*</span>会次名</span>'
+                    f'<input type="text" name="name" value="{esc(str(values.get("name") or name))}"'
+                    " readonly></label>")
+                continue
+            if field_type == "file":
+                rows_html.append(image_with_preview(key, label))
+                continue
+            if field_type == "textarea":
+                rows_html.append(textarea(key, label, help_text))
+            else:
+                rows_html.append(text_input(
+                    key, label, help_text,
+                    "date" if field_type == "date" else "text"))
+        cards.append(_entity_card(
+            "基本资料", '<div class="form-grid">' + "".join(rows_html) + "</div>",
+            "edit-card-profile-main"))
+
+    # 会次/标签的外链已经在 spec 的 textarea 里渲染过, 不再重复给一张卡。
+    if kind in ("artist", "circle"):
+        cards.append(_entity_card("相关链接", link_inner, "edit-card-links"))
+
     body = (
         f"{_notice_html('', notice)}"
-        f'<p class="section-note">正在编辑: <a href="{esc(back_url or action[:-5])}">'
+        f'<p class="section-note">正在编辑: <a href="{esc(back)}">'
         f"{esc(name)}</a></p>"
         f'<form class="auth-form new-form" method="post" action="{action}"'
         ' enctype="multipart/form-data">'
         + _hidden("csrf_token", ctx.csrf_token)
-        + "".join(rows)
+        + '<div class="edit-cards is-profile">' + "".join(cards) + "</div>"
         + '<div class="field-actions"><button type="submit">保存资料</button>'
-        f'<a class="btn-ghost" href="{esc(back_url or action[:-5])}">{i18n.translate("btn.cancel", ctx.lang)}</a></div></form>'
+        f'<a class="btn-ghost" href="{esc(back)}">'
+        f'{i18n.translate("btn.cancel", ctx.lang)}</a></div></form>'
     )
     return layout(ctx, title=f"编辑 {name}", body=body, active="edit",
-                  breadcrumbs=[("工作队列", "/edit"), (name, back_url or ""),
+                  breadcrumbs=[("工作队列", "/edit"), (name, back),
                                ("编辑资料", "")])
+
+
+def url_rows_editor(name: str, rows: Sequence[Mapping[str, Any]] = ()) -> str:
+    """外链行编辑(新建页用). ``name`` 只用于区分容器, 字段名固定.
+
+    与专辑编辑页完全同一套标记(``url_key`` / ``url_value`` / ``data-pair-add``),
+    所以 ``setupPairRows()`` / ``setupLinkAutoName()`` 不用改就能生效。
+    """
+    del name
+    body = "".join(
+        '<div class="pair-row" data-pair-row="url">'
+        '<label class="field auth-field"><span>链接名</span>'
+        '<input type="text" name="url_key" value="{}" list="dl-url_key"'
+        ' autocomplete="off" placeholder="填网址自动识别"></label>'
+        '<label class="field auth-field"><span>网址</span>'
+        '<input type="text" name="url_value" value="{}"'
+        ' placeholder="https://..."></label>'
+        '<button type="button" class="pair-del" data-pair-del="url"'
+        ' title="删除这一条" aria-label="删除这一条">✕</button></div>'.format(
+            esc(str(row.get("text") or "")), esc(str(row.get("href") or "")))
+        for row in (list(rows) or [{"text": "", "href": ""}])
+    )
+    choices = "".join('<option value="{}"></option>'.format(esc(_one))
+                      for _one in link_names.name_choices())
+    return (
+        '<datalist id="dl-url_key">' + choices + "</datalist>"
+        '<div class="rows">' + body + "</div>"
+        '<div class="pair-add"><button type="button" class="btn-ghost btn-xs"'
+        ' data-pair-add="url">＋ 添加外链</button></div>'
+    )
+
+
+def staff_rows_editor(rows: Sequence[Mapping[str, Any]] = ()) -> str:
+    """社团成员行编辑(新建页用). 字段名与编辑页一致(staff_role / staff_name)."""
+    body = "".join(
+        '<div class="pair-row" data-pair-row="staff">'
+        '<label class="field auth-field"><span>角色</span>'
+        '<input type="text" name="staff_role" value="{}"'
+        ' placeholder="owner / 主催 / 作曲"></label>'
+        '<label class="field auth-field"><span>名字</span>'
+        '<input type="text" name="staff_name" value="{}"'
+        ' placeholder="成员名"></label>'
+        '<button type="button" class="pair-del" data-pair-del="staff"'
+        ' title="删除这一条" aria-label="删除这一条">✕</button></div>'.format(
+            esc(str(row.get("role") or "")), esc(str(row.get("name") or "")))
+        for row in (list(rows) or [{"role": "", "name": ""}])
+    )
+    return (
+        '<div class="rows">' + body + "</div>"
+        '<div class="pair-add"><button type="button" class="btn-ghost btn-xs"'
+        ' data-pair-add="staff">＋ 添加成员</button></div>'
+    )
 
 
 def new_entity_page(
@@ -3076,10 +3356,10 @@ def new_entity_page(
             + "</div></section>"
             f'<section class="panel"><h2 class="section-title">{i18n.translate("section.description", ctx.lang)}</h2>'
             + area("bio", "简介") + "</section>"
+            # 用户 m20229: 相关链接与编辑页一样走行编辑(填网址自动识别链接名);
+            # 头像改成上面的上传控件, 不再让人手填地址。
             '<section class="panel"><h2 class="section-title">相关链接</h2>'
-            + area("links", "每行: 标签: URL") + "</section>"
-            '<section class="panel"><h2 class="section-title">头像地址</h2>'
-            + text("avatar", "头像 URL", hint="留空则用首字母") + "</section>"
+            + url_rows_editor("links", ()) + "</section>"
         )
     elif kind == "circle":
         body_main = (
@@ -3095,9 +3375,9 @@ def new_entity_page(
             f'<section class="panel"><h2 class="section-title">{i18n.translate("section.description", ctx.lang)}</h2>'
             + area("description", "简介") + "</section>"
             '<section class="panel"><h2 class="section-title">相关链接</h2>'
-            + area("urls", "每行: 标签: URL") + "</section>"
+            + url_rows_editor("urls", ()) + "</section>"
             '<section class="panel"><h2 class="section-title">成员</h2>'
-            + area("staff", "每行: 角色: 名字") + "</section>"
+            + staff_rows_editor(()) + "</section>"
         )
     elif kind == "event":
         # 所属系列的候选(下拉), 避免用户手打系列名对不上
@@ -5030,7 +5310,11 @@ def edit_values_from_album(album: Any) -> dict[str, Any]:
       "title_original": str(_attr(album, "title", "title_original",
                                   default="") or ""),
       "title_romaji": str(_attr(album, "romaji", "title_romaji", default="") or ""),
-      "circle": str(_attr(album, "circle", default="") or ""),
+      # 用户 m20229: 绑定控件按行显示多个社团; 只有一个时也照常显示一行。
+      "circle": "\n".join(
+          str(one) for one in (_attr(album, "circles", default=[]) or [])
+          if str(one).strip())
+      or str(_attr(album, "circle", default="") or ""),
       "artists": "、".join(str(a) for a in (_attr(album, "artists",
                                                  default=[]) or []) if a),
       "release_date": str(_attr(album, "date", "release_date", default="") or ""),
@@ -6268,6 +6552,7 @@ def _profile_card(
     aliases: Sequence[str] = (),
     links: Sequence[Mapping[str, Any]] = (),
     subtitle: str = "",
+    alias_links: Mapping[str, str] | None = None,
 ) -> str:
     """左栏资料卡(艺术家/社团共用): 头像/LOGO + 名字 + 关注数 + 字段."""
     if image:
@@ -6282,9 +6567,20 @@ def _profile_card(
     )
     alias_html = ""
     if aliases:
+        # 用户 m20229: 与已有艺人同名的别名直接链过去, 别的照旧是纯文本。
+        _alias_links = alias_links or {}
+        _alias_bits = []
+        for _one in aliases:
+            _href = str(_alias_links.get(_one) or "")
+            if _href:
+                _alias_bits.append(
+                    '<a class="alias-link" href="{}">{}</a>'.format(
+                        esc(_href), esc(_one)))
+            else:
+                _alias_bits.append(esc(_one))
         alias_html = (
             f'<div class="profile-row"><dt>{i18n.translate("field.aliases", ctx.lang)}</dt><dd>'
-            + "、".join(esc(a) for a in aliases) + "</dd></div>"
+            + "、".join(_alias_bits) + "</dd></div>"
         )
     link_html = ""
     if links:
@@ -6412,6 +6708,7 @@ def artist_detail_page(
         flag=flag, followers=int(followers or 0), following=following,
         next_url="/artist/" + quote_segment(name), fields=fields,
         aliases=[str(a) for a in artist.get("aliases") or []],
+        alias_links=artist.get("alias_links") or {},
         links=list(artist.get("links") or []),
         subtitle=f"{artist.get('album_count') or len(artist.get('albums') or [])} 张参与专辑",
     )
