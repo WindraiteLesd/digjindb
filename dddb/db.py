@@ -97,7 +97,7 @@ def comment_body_problem(body: Any, *, limit: int = COMMENT_BODY_LIMIT) -> str:
 
 #: 保存时允许 Web 面板 / CLI 直接改写的字段
 _EDITABLE_FIELDS = (
-    "title", "title_original", "title_romaji", "circle", "artists",
+    "title", "title_original", "title_romaji", "circle", "circles", "artists",
     "release_date", "event", "catalog_no", "company", "genres", "tags",
     "description",
     "price", "cover_url", "booth", "hall", "track_list", "urls", "credits",
@@ -2753,6 +2753,11 @@ class Store:
         if "event" in patch:
             album.event = as_text(patch["event"])
             album.event_kind = _kind_of(album.event)
+        # 社团名单(用户 m20229): 合辑可能有两个以上社团, 不能合并成一个名字。
+        if "circles" in patch:
+            album.circles = as_list(patch["circles"])
+        elif "circle" in patch:
+            album.circles = [album.circle] if album.circle else []
         if "artists" in patch:
             album.artists = as_list(patch["artists"])
         if "genres" in patch:
