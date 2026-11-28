@@ -220,18 +220,19 @@ CIRCLE_ACTIVE_WINDOW_DAYS = 540
 
 
 def normalize_staff_role(value: Any) -> str:
-    """把自由填写的角色归一到 ``owner`` / ``member``.
+    """把自由填写的角色归一到 ``owner`` / ``member``, 认不出来的**原样保留**.
 
-    空值按 ``member``(成员)处理 —— 界面上新加一行人员时还没选角色, 不该直接报错;
-    但**认不出来的词**必须报错, 否则用户写成 "主催者1" 会被静默存成成员。
+    空值按 ``member``(成员)处理 —— 界面上新加一行人员时还没选角色, 不该直接报错。
+
+    认不出来的词以前会抛 ``ValueError``(「非法的人员角色」), 于是用户想写
+    「作曲」「编曲」这种具体职责时整个社团都保存失败(用户 m20229 要求成员
+    也能自由填角色)。现在照 ``normalize_activity_type`` 的做法: 存原文,
+    显示时 ``role_label`` 再兜底 —— 少一个用途标签, 总好过整次保存失败。
     """
     raw = _clean_str(value)
     if not raw:
         return "member"
-    key = raw.lower()
-    if key in _CIRCLE_STAFF_ALIASES:
-        return _CIRCLE_STAFF_ALIASES[key]
-    raise ValueError(f"非法的人员角色: {value!r}（只能是 owner 主催 / member 成员）")
+    return _CIRCLE_STAFF_ALIASES.get(raw.lower(), raw)
 
 
 def normalize_activity_type(value: Any) -> str:
@@ -425,6 +426,10 @@ class Circle:
     def activity_label(self) -> str:
         return CIRCLE_ACTIVITY_LABELS.get(self.activity_type, self.activity_type)
 
+    def role_label(self, role: str) -> str:
+        """角色的展示名: 已知的翻成中文, 自由填写的原样返回."""
+        return CIRCLE_STAFF_LABELS.get(role, role)
+
     def staff_by_role(self, role: str) -> list[str]:
         role_key = normalize_staff_role(role)
         return [p.name for p in self.staff if p.role == role_key]
@@ -507,6 +512,11 @@ class Album:
     title_original: str = ""
     title_romaji: str = ""
     circle: str = ""
+    #: 全部出品社团(用户 m20229)。``circle`` 仍保留为主社团(第一个),
+    #: 老代码和老数据全部按它工作; 合辑/合作碟有两个以上社团时,
+    #: 以前会被 ``_clean_str`` 用空格拼成一个名字("甲 乙"), 索引里
+    #: 就变成一条叫「甲 乙」的社团。这里单独留一份完整名单。
+    circles: list[str] = field(default_factory=list)
     artists: list[str] = field(default_factory=list)
     release_date: str = ""          # ISO-8601 (YYYY-MM-DD 或 YYYY-MM)
     event: str = ""                 # "M3-2026秋" / "C107" / "例大祭23"
@@ -568,6 +578,18 @@ class Album:
         self.title_original = _clean_str(self.title_original)
         self.title_romaji = _clean_str(self.title_romaji)
         self.circle = _clean_str(self.circle)
+        # 社团名单: 去空、去重(保持顺序); ``circle`` 一定在里面,
+        # 且排在第一位 —— 只填了 circle 的老数据也自动补上。
+        cleaned: list[str] = []
+        for item in self.circles or []:
+            text = _clean_str(item)
+            if text and text not in cleaned:
+                cleaned.append(text)
+        if self.circle and self.circle not in cleaned:
+            cleaned.insert(0, self.circle)
+        if cleaned and not self.circle:
+            self.circle = cleaned[0]
+        self.circles = cleaned
         self.event = _clean_str(self.event)
         self.event_kind = _clean_str(self.event_kind) or event_kind(self.event)
         self.catalog_no = _clean_str(self.catalog_no)
@@ -751,6 +773,7 @@ class Album:
             "title_original": self.title_original,
             "title_romaji": self.title_romaji,
             "circle": self.circle,
+            "circles": list(self.circles),
             "artists": list(self.artists),
             "release_date": self.release_date,
             "event": self.event,
@@ -794,6 +817,7 @@ class Album:
             title_original=_clean_str(data.get("title_original")),
             title_romaji=_clean_str(data.get("title_romaji")),
             circle=_clean_str(data.get("circle")),
+            circles=list(data.get("circles") or []),
             artists=list(data.get("artists") or []),
             release_date=_clean_str(data.get("release_date")),
             event=_clean_str(data.get("event")),
