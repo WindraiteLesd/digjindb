@@ -46,6 +46,9 @@ LINK_NAME_RULES: tuple[tuple[str, str], ...] = (
     ("shop.geekjack.net", "Geek Jack"),
     ("geekjack.net", "Geek Jack"),
     ("tanocstore.net", "TANO*C Store"),
+    # 用户 m20229: linkco.re 是日本同人常用的「多平台试听聚合」,
+    # 一个链接里挂着 Apple Music / Spotify / YouTube 等。
+    ("linkco.re", "Stream Links"),
 )
 
 #: 下拉候选: 上面那些名字去重后按出现顺序, 外加 embed 两种。
